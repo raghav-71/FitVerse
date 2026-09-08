@@ -1,0 +1,71 @@
+# ==============================================================================
+# FitVerse AI — Project Requirements & One-Command Setup
+# ==============================================================================
+#
+# QUICK START (ONE COMMAND TO INSTALL & RUN):
+#   npm install && npm start
+#
+# (Alternatively for web: npm install && npm run web)
+#
+# ==============================================================================
+# 1. SYSTEM PREREQUISITES
+# ==============================================================================
+# - Node.js: >= 18.0.0 (LTS recommended) -> https://nodejs.org
+# - npm: >= 9.0.0 (comes bundled with Node.js)
+# - Expo Go App (optional, for physical phone testing):
+#     - Android (Google Play Store): Expo Go
+#     - iOS (Apple App Store): Expo Go
+#
+# ==============================================================================
+# 2. ENVIRONMENT VARIABLES (.env)
+# ==============================================================================
+# - DOES THIS PROJECT NEED A .env FILE?
+#   -> NO. FitVerse AI is 100% self-contained. All offline-first states, mock
+#      services, theme stores, and 10+ Indian language translation engines run
+#      client-side without any third-party API keys.
+#
+# ==============================================================================
+# 3. CORE RUNTIME DEPENDENCIES
+# ==============================================================================
+expo==57.0.20
+react==19.2.3
+react-dom==19.2.3
+react-native==0.86.3
+react-native-web==0.21.2
+
+# Navigation
+@react-navigation/native==7.3.18
+@react-navigation/native-stack==7.18.10
+@react-navigation/bottom-tabs==7.18.18
+react-native-screens==4.26.0
+react-native-safe-area-context==5.7.0
+
+# Gestures & Animations
+react-native-gesture-handler==3.2.1
+react-native-reanimated==4.6.0
+@gorhom/bottom-sheet==5.2.14
+
+# State Management & Async Querying
+zustand==5.0.15
+@tanstack/react-query==5.102.8
+
+# Hardware, UI & Sensors
+expo-camera==57.0.4
+expo-haptics==57.0.2
+expo-linear-gradient==57.0.1
+expo-blur==57.0.2
+expo-status-bar==57.0.1
+lucide-react-native==1.41.0
+react-native-svg==15.15.4
+@expo/metro-runtime==57.0.15
+
+# ==============================================================================
+# 4. AVAILABLE ONE-LINER COMMANDS
+# ==============================================================================
+# - Start Metro Bundler:           npm start
+# - Launch Web Browser:            npm run web
+# - Launch Android Emulator:       npm run android
+# - Launch iOS Simulator:          npm run ios
+# - Build Standalone Android APK:  npm run build:apk
+# - Build All Platforms (EAS):     npm run build:all
+# ==============================================================================
