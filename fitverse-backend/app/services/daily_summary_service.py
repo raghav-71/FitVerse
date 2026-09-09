@@ -86,7 +86,7 @@ class DailySummaryService:
             except Exception as e:
                 logger.error(f"Error summing food logs from Supabase: {e}")
         else:
-            user_meals = [m for m in DEV_MEALS_STORE if m.get("user_id") == user_id or user_id == "usr_001"]
+            user_meals = [m for m in DEV_MEALS_STORE if m.get("user_id") == user_id]
             total_calories = sum(m.get("calories", 0) for m in user_meals)
             total_protein = sum(float(m.get("protein", 0.0)) for m in user_meals)
             total_carbs = sum(float(m.get("carbs", 0.0)) for m in user_meals)
@@ -109,7 +109,7 @@ class DailySummaryService:
             except Exception as e:
                 logger.error(f"Error summing water logs from Supabase: {e}")
         else:
-            user_water = [w for w in DEV_WATER_LOGS if w.get("user_id") == user_id or user_id == "usr_001"]
+            user_water = [w for w in DEV_WATER_LOGS if w.get("user_id") == user_id]
             total_water_ml = sum(float(w.get("amount_ml", 0.0)) for w in user_water)
 
         # 3. Upsert to Supabase daily_summaries if connected

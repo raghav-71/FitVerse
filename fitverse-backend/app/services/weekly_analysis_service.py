@@ -3,6 +3,7 @@ from datetime import datetime, date, timedelta
 from app.database.supabase import get_supabase
 from app.core.logging import logger
 from app.services.daily_summary_service import daily_summary_service
+from app.services.injury_safety_service import injury_safety_service
 
 # In-memory storage for dev / offline mode
 DEV_WEEKLY_SUMMARIES: Dict[str, Dict[str, Any]] = {}
@@ -156,8 +157,25 @@ class WeeklyAnalysisService:
             except Exception as e:
                 logger.warning(f"Error querying Supabase for weekly report: {e}")
 
-        # If no real data (dev / fallback demo state)
-        if not has_real_data or len(cals_list) == 0:
+        # Determine if real data exists for this user
+        has_data = has_real_data or (user_id == "usr_001")
+
+        # If no real data and not usr_001 demo user, clear lists
+        if not has_data:
+            cals_list = []
+            protein_list = []
+            water_list = []
+            workout_days = 0
+            total_workout_minutes = 0
+            calories_burned = 0
+            form_scores = []
+            steps_list = []
+            sleep_hours_list = []
+            stress_levels_list = []
+            weights_recorded = []
+            daily_scores_list = []
+        elif not has_real_data or len(cals_list) == 0:
+            # Dev fallback for usr_001 demo user
             if week_offset == 0:
                 cals_list = [2150, 2200, 1950, 2080, 2250, 2000, 2210]
                 protein_list = [135, 142, 128, 145, 150, 130, 136]
@@ -364,6 +382,25 @@ class WeeklyAnalysisService:
             ]
         }
 
+        # Check for active injury profile to adapt weekly athletic guidance
+        injury_profile = injury_safety_service.get_user_profile(user_id)
+        if injury_profile:
+            bp = (injury_profile.get("body_part") or "joint").capitalize()
+            pl = injury_profile.get("pain_level", 0)
+            caution = injury_profile.get("caution_level", "low")
+            if caution == "high" or pl >= 7:
+                next_week_plan["workout"] = [
+                    f"Joint Safety Alert: Pause high-axial loads on {bp} (Pain Level {pl}/10).",
+                    "Prioritize pain-free low-impact cardio (swimming/cycling) and seek clinical evaluation if symptoms persist.",
+                    "Dedicate 10 minutes to gentle joint mobility before any non-weight-bearing movement."
+                ]
+            elif caution == "moderate" or pl >= 4:
+                next_week_plan["workout"] = [
+                    f"Joint Protection Protocol: Use low-impact alternatives for {bp} (limit depth to 90°).",
+                    "Focus on controlled eccentric tempo (3s down, 1s hold) to protect tendon structures.",
+                    f"Dedicate 5-8 minutes to dynamic mobility for {bp} prior to each session."
+                ]
+
         # -------------------------------------------------------------
         # 9. PERSIST TO weekly_summaries TABLE
         # -------------------------------------------------------------
@@ -407,7 +444,8 @@ class WeeklyAnalysisService:
             "problems": problems,
             "achievements": achievements,
             "ai_analysis": ai_analysis,
-            "next_week_plan": next_week_plan
+            "next_week_plan": next_week_plan,
+            "has_data": has_data
         }
 
         # In-memory dev cache

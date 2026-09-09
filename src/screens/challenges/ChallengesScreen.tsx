@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -28,10 +28,14 @@ import { theme } from '../../theme';
 import { useChallenges, useLeaderboard } from '../../services/mock/queries';
 import { useGamificationStore } from '../../stores/gamificationStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useDailyActivityStore } from '../../stores/dailyActivityStore';
+import { useDietStore } from '../../stores/dietStore';
+import { useWorkoutSessionStore } from '../../stores/workoutSessionStore';
 import { Challenge, LeaderboardUser } from '../../services/mock/types';
 import { MOCK_CHALLENGES } from '../../services/mock/data';
 import { useTranslation } from '../../stores/languageStore';
 import { useTheme } from '../../stores/themeStore';
+import { GamificationService } from '../../services/api/gamificationService';
 
 import { SegmentedTabControl } from './components/SegmentedTabControl';
 import { ChallengeCard } from './components/ChallengeCard';
@@ -43,7 +47,7 @@ interface ChallengesScreenProps {
 }
 
 type MainTab = 'challenges' | 'leaderboard';
-type ChallengeFilter = 'all' | 'daily' | 'weekly' | 'friend';
+type ChallengeFilter = 'all' | 'active' | 'available' | 'completed' | 'daily' | 'weekly';
 type LeaderboardMetric = 'daily' | 'weekly' | 'challenge' | 'streak';
 
 export const ChallengesScreen: React.FC<ChallengesScreenProps> = ({ navigation }) => {
@@ -63,15 +67,76 @@ export const ChallengesScreen: React.FC<ChallengesScreenProps> = ({ navigation }
   // Stores
   const { xp, level, streak, addReward } = useGamificationStore();
   const { user } = useAuthStore();
+  const waterGlasses = useDailyActivityStore((state) => state.waterGlasses);
+  const steps = useDailyActivityStore((state) => state.steps || 6420);
+  const exerciseLogged = useDailyActivityStore((state) => state.exerciseLogged);
+  const meals = useDietStore((state) => state.meals);
+  const getTotals = useDietStore((state) => state.getTotals);
+  const completedSummary = useWorkoutSessionStore((state) => state.completedSummary);
+
   const { t, num } = useTranslation();
   const { colors, isDark, toggleThemeMode } = useTheme();
+
+  const totalProtein = getTotals().protein;
+  const totalWaterMl = waterGlasses * 250;
+  const totalCompletedWorkouts = (completedSummary ? 1 : 0) + (exerciseLogged ? 1 : 0);
+
+  // Calculate live dynamic activity progress
+  const getLiveProgress = (c: Challenge): number => {
+    if (c.completed) return c.targetProgress;
+    const id = c.id.toLowerCase();
+    if (id.includes('water') || id.includes('hydration')) {
+      return c.unit === 'ml' ? totalWaterMl : waterGlasses;
+    }
+    if (id.includes('protein') || id.includes('nutrition')) {
+      return totalProtein;
+    }
+    if (id.includes('squat') || id.includes('workout') || id.includes('rep') || id.includes('pushup')) {
+      return totalCompletedWorkouts > 0 ? c.targetProgress : c.currentProgress;
+    }
+    if (id.includes('step') || id.includes('walk')) {
+      return steps;
+    }
+    return c.currentProgress;
+  };
+
+  // Load verified gamification profile & challenges from backend
+  useEffect(() => {
+    useGamificationStore.getState().fetchProfile();
+    GamificationService.getChallenges().then((backendList) => {
+      if (backendList && backendList.length > 0) {
+        const mapped: Challenge[] = backendList.map((b: any) => ({
+          id: b.id,
+          title: b.title,
+          description: b.description,
+          type: (b.category || 'daily') as 'daily' | 'weekly' | 'special',
+          category: (b.category || 'daily').toUpperCase(),
+          rewardXp: b.reward_xp ?? b.xp_reward ?? 100,
+          rewardCoins: b.reward_coins ?? b.coins_reward ?? 20,
+          currentProgress: b.current_progress ?? b.current_value ?? 0,
+          targetProgress: b.target_value ?? 100,
+          unit: b.id.includes('water') ? 'ml' : b.id.includes('squat') ? 'reps' : b.id.includes('protein') ? 'g' : 'days',
+          joined: b.joined ?? true,
+          completed: b.completed ?? false,
+          expiresInHours: b.category === 'daily' ? 14 : 96,
+          participantsCount: 1420,
+          badgeIcon: b.id.includes('squat') ? 'ShieldCheck' : b.id.includes('water') ? 'Zap' : 'Flame',
+        }));
+        setChallengesState(mapped);
+      }
+    });
+  }, []);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    await Promise.all([refetchChallenges(), refetchLeaderboard()]);
+    await Promise.all([
+      refetchChallenges(),
+      refetchLeaderboard(),
+      useGamificationStore.getState().fetchProfile(),
+    ]);
     setRefreshing(false);
   };
 
@@ -93,27 +158,47 @@ export const ChallengesScreen: React.FC<ChallengesScreenProps> = ({ navigation }
     );
   };
 
-  // Claim completed challenge
-  const handleClaimReward = (id: string) => {
-    try {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    } catch {}
-
+  // Claim completed challenge with strict backend validation
+  const handleClaimReward = async (id: string) => {
     const challenge = challengesState.find((c) => c.id === id);
-    if (challenge && !challenge.completed) {
+    if (!challenge) return;
+
+    const liveProg = getLiveProgress(challenge);
+    if (liveProg < challenge.targetProgress) {
+      // Must satisfy condition before claiming
+      return;
+    }
+
+    if (!challenge.completed) {
+      try {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch {}
+
       addReward(challenge.rewardXp, challenge.rewardCoins);
       setChallengesState((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, completed: true } : c))
+        prev.map((c) => (c.id === id ? { ...c, completed: true, currentProgress: c.targetProgress } : c))
       );
+      await GamificationService.completeChallenge(id);
+      useGamificationStore.getState().fetchProfile();
     }
   };
 
-  // Filtered challenges
+  // Filtered challenges dynamically mapping live activity metrics
   const activeList = challengesState.length > 0 ? challengesState : (queryChallenges || []);
   const filteredChallenges = useMemo(() => {
-    if (challengeFilter === 'all') return activeList;
-    return activeList.filter((c) => c.type === challengeFilter);
-  }, [activeList, challengeFilter]);
+    return activeList
+      .map((c) => ({
+        ...c,
+        currentProgress: getLiveProgress(c),
+      }))
+      .filter((c) => {
+        if (challengeFilter === 'all') return true;
+        if (challengeFilter === 'active') return c.joined && !c.completed;
+        if (challengeFilter === 'available') return !c.joined && !c.completed;
+        if (challengeFilter === 'completed') return c.completed;
+        return c.type === challengeFilter;
+      });
+  }, [activeList, challengeFilter, waterGlasses, totalProtein, totalCompletedWorkouts, steps]);
 
   // Leaderboard data sorted according to selected metric
   const rawLeaderboard = queryLeaderboard || [];
@@ -263,10 +348,11 @@ export const ChallengesScreen: React.FC<ChallengesScreenProps> = ({ navigation }
             <View style={styles.subFilterRow}>
               {(
                 [
-                  { key: 'all', label: t('allQuests') || 'All Quests' },
+                  { key: 'all', label: t('allQuests') || 'All' },
+                  { key: 'active', label: 'Active' },
+                  { key: 'available', label: 'Available' },
+                  { key: 'completed', label: 'Completed' },
                   { key: 'daily', label: t('dailyTab') || 'Daily' },
-                  { key: 'weekly', label: t('weeklyTab') || 'Weekly' },
-                  { key: 'friend', label: t('friendDuels') || 'Friend Duels' },
                 ] as const
               ).map((tab) => {
                 const isSelected = challengeFilter === tab.key;

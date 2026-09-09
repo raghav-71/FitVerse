@@ -1,4 +1,4 @@
-import { API_CONFIG } from './config';
+import { apiClient } from './client';
 import { CompletedWorkoutSummary, ExerciseItem } from '../../stores/workoutSessionStore';
 
 export interface TelemetryFeedback {
@@ -49,25 +49,16 @@ export const WorkoutService = {
    * POST /api/v1/workout/start
    */
   async startWorkout(workoutName: string, intensity: string = 'medium'): Promise<any> {
-    const url = `${API_CONFIG.getApiV1Url()}/workout/start`;
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workout_name: workoutName,
-          intensity,
-          scheduled_duration_minutes: 15.0,
-        }),
+      return await apiClient.post('/workout/start', {
+        workout_name: workoutName,
+        intensity,
+        scheduled_duration_minutes: 15.0,
       });
-
-      if (response.ok) {
-        return await response.json();
-      }
     } catch (err) {
       console.warn('Backend start workout failed, running offline:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -75,21 +66,12 @@ export const WorkoutService = {
    * POST /api/v1/workout/exercise
    */
   async logExercise(payload: WorkoutExercisePayload): Promise<any> {
-    const url = `${API_CONFIG.getApiV1Url()}/workout/exercise`;
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.post('/workout/exercise', payload);
     } catch (err) {
       console.warn('Backend log exercise failed:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -97,21 +79,12 @@ export const WorkoutService = {
    * POST /api/v1/workout/complete
    */
   async completeWorkout(payload: WorkoutCompletePayload): Promise<any> {
-    const url = `${API_CONFIG.getApiV1Url()}/workout/complete`;
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.post('/workout/complete', payload);
     } catch (err) {
       console.warn('Backend complete workout failed, saved locally:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -147,16 +120,12 @@ export const WorkoutService = {
    * GET /api/v1/workout/today
    */
   async getTodayWorkout(): Promise<any> {
-    const url = `${API_CONFIG.getApiV1Url()}/workout/today`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get('/workout/today');
     } catch (err) {
       console.warn('Failed to fetch today workout:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -164,16 +133,13 @@ export const WorkoutService = {
    * GET /api/v1/workout/history
    */
   async getWorkoutHistory(): Promise<any[]> {
-    const url = `${API_CONFIG.getApiV1Url()}/workout/history`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      const res = await apiClient.get<any[]>('/workout/history');
+      return Array.isArray(res) ? res : [];
     } catch (err) {
       console.warn('Failed to fetch workout history:', err);
+      return [];
     }
-    return [];
   },
 
   /**
@@ -188,21 +154,12 @@ export const WorkoutService = {
     current_rep: number;
     rep_phase?: string;
   }): Promise<TelemetryFeedback | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/workout/telemetry`;
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.post<TelemetryFeedback>('/workout/telemetry', data);
     } catch (err) {
-      // Return null silently for ultra fast fallback to client-side heuristics
+      // Return null silently for fast fallback to client heuristics
+      return null;
     }
-    return null;
   },
 
   /**
@@ -210,13 +167,12 @@ export const WorkoutService = {
    * GET /api/v1/workout/catalog
    */
   async getCatalog(): Promise<ExerciseItem[]> {
-    const url = `${API_CONFIG.getApiV1Url()}/workout/catalog`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        const raw = await response.json();
+      const raw = await apiClient.get<any[]>('/workout/catalog');
+      if (Array.isArray(raw)) {
         return raw.map((item: any) => ({
           id: item.id,
+          typeKey: (item.typeKey || item.type_key || (item.id?.includes('squat') ? 'squat' : item.id?.includes('push') ? 'push_up' : item.id?.includes('lunge') ? 'lunge' : item.id?.includes('plank') ? 'plank' : 'jumping_jack')) as any,
           name: item.name,
           category: item.category,
           difficulty: item.difficulty,

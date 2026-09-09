@@ -3,6 +3,7 @@ from datetime import datetime, date
 from app.database.supabase import get_supabase
 from app.core.logging import logger
 from app.services.daily_summary_service import daily_summary_service
+from app.services.injury_safety_service import injury_safety_service
 
 # Dev in-memory storage for daily scores
 DEV_DAILY_SCORES: Dict[str, int] = {}
@@ -337,12 +338,39 @@ class DailyHealthCoachService:
         if weight_kg is not None and target_weight:
             recovery_parts.append(f"Weight is currently tracking at {weight_kg} kg against your {target_weight} kg goal.")
 
+        # -------------------------------------------------------------
+        # INJURY PRECAUTIONS INTEGRATION
+        # -------------------------------------------------------------
+        injury_profile = injury_safety_service.get_user_profile(user_id)
+        if injury_profile:
+            bp = (injury_profile.get("body_part") or "joint").capitalize()
+            pl = injury_profile.get("pain_level", 0)
+            caution = injury_profile.get("caution_level", "low")
+            if caution == "high" or pl >= 7:
+                recovery_parts.append(
+                    f"⚠️ Joint Safety Alert: High discomfort reported on {bp} (Level {pl}/10). Cease heavy compound loads on this area and consult a medical professional if pain persists."
+                )
+            elif caution == "moderate" or pl >= 4:
+                recovery_parts.append(
+                    f"Joint Guard Active: Monitoring {bp} discomfort (Level {pl}/10). AI kinetic tracking will enforce safe range of motion."
+                )
+
         recovery_analysis = " ".join(recovery_parts)
 
         # -------------------------------------------------------------
         # TOMORROW RECOMMENDATIONS (Encouraging, Practical, Safe)
         # -------------------------------------------------------------
         tomorrow_recs: List[str] = []
+
+        if injury_profile:
+            bp = (injury_profile.get("body_part") or "joint").capitalize()
+            pl = injury_profile.get("pain_level", 0)
+            caution = injury_profile.get("caution_level", "low")
+            if caution == "high" or pl >= 7:
+                tomorrow_recs.append(f"Protect your {bp}: Swap compound lifts for non-weight-bearing mobility to allow tissue recovery.")
+            elif caution == "moderate" or pl >= 4:
+                tomorrow_recs.append(f"Joint safety cue: Cap {bp} movement depth at 90° and use slow controlled cadence on all sets.")
+
         if pro_consumed < pro_target:
             tomorrow_recs.append("Your protein intake was below your target today. Consider adding a protein-rich food to your meals tomorrow.")
         else:

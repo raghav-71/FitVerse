@@ -128,6 +128,7 @@ class WeeklyReportResponse(BaseModel):
     achievements: List[str]
     ai_analysis: str
     next_week_plan: NextWeekPlan
+    has_data: Optional[bool] = True
 
 @router.post(
     "/diet-plan",

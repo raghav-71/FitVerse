@@ -8,7 +8,8 @@ import {
 } from 'react-native';
 import Svg, { Circle, Line, Rect, Text as SvgText } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Play, Pause, Square, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Play, Pause, Square, Sparkles, CheckCircle2, AlertTriangle, Camera as CameraIcon } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../../theme/colors';
 import { useWorkoutStore } from '../../stores/workoutStore';
@@ -42,6 +43,7 @@ export const CameraPoseView: React.FC = () => {
 
   const [isPaused, setIsPaused] = useState(false);
   const [posePhase, setPosePhase] = useState<'standing' | 'bottom'>('standing');
+  const [permission, requestPermission] = useCameraPermissions();
 
   // Timer tick
   useEffect(() => {
@@ -87,15 +89,34 @@ export const CameraPoseView: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      {/* Simulated Camera Feed Viewfinder */}
+      {/* Live Camera Feed Viewfinder */}
       <View style={styles.viewfinder}>
-        <LinearGradient
-          colors={['#0F172A', '#0B0F19', '#05070B']}
-          style={StyleSheet.absoluteFill}
-        />
+        {permission?.granted ? (
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            facing="front"
+            mirror={true}
+          />
+        ) : (
+          <LinearGradient
+            colors={['#0F172A', '#0B0F19', '#05070B']}
+            style={StyleSheet.absoluteFill}
+          />
+        )}
+
+        {!permission?.granted && (
+          <TouchableOpacity
+            style={styles.enableCamBtn}
+            onPress={requestPermission}
+            activeOpacity={0.8}
+          >
+            <CameraIcon size={14} color="#FFFFFF" />
+            <Text style={styles.enableCamText}>Enable Camera Preview</Text>
+          </TouchableOpacity>
+        )}
 
         {/* HUD Scanner Grid Effect */}
-        <View style={styles.gridOverlay}>
+        <View style={styles.gridOverlay} pointerEvents="none">
           <View style={styles.cornerTL} />
           <View style={styles.cornerTR} />
           <View style={styles.cornerBL} />
@@ -477,5 +498,23 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '800',
+  },
+  enableCamBtn: {
+    position: 'absolute',
+    bottom: 24,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(79, 124, 255, 0.85)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    zIndex: 20,
+  },
+  enableCamText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

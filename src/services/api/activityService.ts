@@ -1,4 +1,4 @@
-import { API_CONFIG } from './config';
+import { apiClient } from './client';
 
 export interface DailySummaryResponse {
   user_id: string;
@@ -71,16 +71,12 @@ export const ActivityService = {
    * GET /api/v1/activity/daily-summary
    */
   async getDailySummary(): Promise<DailySummaryResponse | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/activity/daily-summary`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get<DailySummaryResponse>('/activity/daily-summary');
     } catch (err) {
       console.warn('Failed to fetch daily summary from backend:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -88,14 +84,9 @@ export const ActivityService = {
    * POST /api/v1/activity/exercise
    */
   async logExercise(activities: string[], durationMinutes: number = 45): Promise<boolean> {
-    const url = `${API_CONFIG.getApiV1Url()}/activity/exercise`;
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ activities, duration_minutes: durationMinutes }),
-      });
-      return response.ok;
+      await apiClient.post('/activity/exercise', { activities, duration_minutes: durationMinutes });
+      return true;
     } catch (err) {
       console.warn('Failed to log exercise to backend:', err);
       return false;
@@ -116,39 +107,25 @@ export const ActivityService = {
     avg_liters_per_day: number;
     streak_days: number;
   } | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/water/today`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get<any>('/water/today');
     } catch (err) {
       console.warn('Failed to fetch water data from backend:', err);
+      return null;
     }
-    return null;
   },
 
   /**
    * Log Water Consumption
    * POST /api/v1/water/log
-   * Example request: { "amount_ml": 500 }
-   * Response: { "today_total_ml": 2500, "daily_target_ml": 3500, "progress_percentage": 71 }
    */
   async logWater(amountMl: number = 250): Promise<WaterLogResult | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/water/log`;
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount_ml: amountMl }),
-      });
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.post<WaterLogResult>('/water/log', { amount_ml: amountMl });
     } catch (err) {
       console.warn('Failed to log water to backend:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -164,10 +141,9 @@ export const ActivityService = {
    * DELETE /api/v1/water/{id}
    */
   async deleteWater(id: string): Promise<boolean> {
-    const url = `${API_CONFIG.getApiV1Url()}/water/${id}`;
     try {
-      const response = await fetch(url, { method: 'DELETE' });
-      return response.ok;
+      await apiClient.delete(`/water/${id}`);
+      return true;
     } catch (err) {
       console.warn('Failed to delete water log:', err);
       return false;
@@ -180,16 +156,12 @@ export const ActivityService = {
    */
   async getDailyNutritionSummary(dateStr?: string): Promise<DailyNutritionSummary | null> {
     const query = dateStr ? `?date=${encodeURIComponent(dateStr)}` : '';
-    const url = `${API_CONFIG.getApiV1Url()}/nutrition/daily-summary${query}`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get<DailyNutritionSummary>(`/nutrition/daily-summary${query}`);
     } catch (err) {
       console.warn('Failed to fetch daily nutrition summary:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -197,16 +169,12 @@ export const ActivityService = {
    * GET /api/v1/weight/history
    */
   async getWeightHistory(): Promise<WeightHistoryResponse | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/weight/history`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get<WeightHistoryResponse>('/weight/history');
     } catch (err) {
       console.warn('Failed to fetch weight history from backend:', err);
+      return null;
     }
-    return null;
   },
 
   /**
@@ -214,18 +182,13 @@ export const ActivityService = {
    * POST /api/v1/weight/log
    */
   async logWeight(weightKg: number, bodyFat?: number, muscleMass?: number): Promise<boolean> {
-    const url = `${API_CONFIG.getApiV1Url()}/weight/log`;
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          weight_kg: weightKg,
-          body_fat_percentage: bodyFat,
-          muscle_mass: muscleMass,
-        }),
+      await apiClient.post('/weight/log', {
+        weight_kg: weightKg,
+        body_fat_percentage: bodyFat,
+        muscle_mass: muscleMass,
       });
-      return response.ok;
+      return true;
     } catch (err) {
       console.warn('Failed to log weight entry to backend:', err);
       return false;
@@ -237,14 +200,9 @@ export const ActivityService = {
    * PUT /api/v1/weight/target
    */
   async updateTargetWeight(targetWeightKg: number): Promise<boolean> {
-    const url = `${API_CONFIG.getApiV1Url()}/weight/target`;
     try {
-      const response = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_weight_kg: targetWeightKg }),
-      });
-      return response.ok;
+      await apiClient.put('/weight/target', { target_weight_kg: targetWeightKg });
+      return true;
     } catch (err) {
       console.warn('Failed to update target weight in backend:', err);
       return false;
@@ -256,12 +214,8 @@ export const ActivityService = {
    * GET /api/v1/progress/fit-score
    */
   async getFitScore(): Promise<FitScoreData | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/progress/fit-score`;
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get<FitScoreData>('/progress/fit-score');
     } catch (err) {
       console.warn('Failed to fetch fit score from backend, using baseline fallback:', err);
     }

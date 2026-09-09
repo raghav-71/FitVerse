@@ -1,37 +1,42 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  TextInput,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import {
   ArrowLeft,
   ShieldCheck,
   ShieldAlert,
   AlertTriangle,
-  CheckCircle2,
   Repeat,
   Sparkles,
   ChevronRight,
   Activity,
   Check,
-  RotateCcw,
+  Info,
+  Sliders,
+  Target,
+  FileText,
 } from 'lucide-react-native';
 
 import { ScreenContainer, GlassCard, GradientButton, Badge } from '../../components/ui';
+import { InteractiveBodyMap } from '../../components/body/InteractiveBodyMap';
 import { Colors } from '../../theme/colors';
-import { theme } from '../../theme';
 import { useAuthStore } from '../../stores/authStore';
-import { useWorkoutStore } from '../../stores/workoutStore';
-import { MOCK_EXERCISES } from '../../services/mock/data';
 import { useTheme } from '../../stores/themeStore';
 import { useTranslation } from '../../stores/languageStore';
-import { AiService } from '../../services/api/aiService';
+import {
+  InjuryService,
+  InjuryAnalyzeResponse,
+  ExerciseClearance,
+} from '../../services/api/injuryService';
 
 interface BodyAreaOption {
   id: string;
@@ -57,24 +62,22 @@ const SEVERITY_OPTIONS: { id: ConditionLevel; label: string; color: string }[] =
   { id: 'current_discomfort', label: 'Current Discomfort', color: Colors.danger },
 ];
 
-interface ExerciseClearance {
-  name: string;
-  target: string;
-  status: 'SAFE' | 'CAUTION' | 'BLOCK';
-  reason: string;
-  alternative?: string;
-  benefit?: string;
-}
+const GOAL_OPTIONS = [
+  { id: 'fat_loss', label: 'Fat Loss' },
+  { id: 'muscle_gain', label: 'Muscle Gain' },
+  { id: 'strength', label: 'Strength' },
+  { id: 'general_fitness', label: 'General Fitness' },
+];
 
 export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
   const { colors, isDark } = useTheme();
   const { t, num } = useTranslation();
   const selectedPainAreas = useAuthStore((state) => state.selectedPainAreas);
   const safetyConditions = useAuthStore((state) => state.safetyConditions);
-  const togglePainArea = useAuthStore((state) => state.togglePainArea);
   const setSafetyCondition = useAuthStore((state) => state.setSafetyCondition);
   const setPainSelection = useAuthStore((state) => state.setPainSelection);
 
+  // Form states
   const [selectedAreas, setSelectedAreas] = useState<string[]>(
     selectedPainAreas.length > 0 ? selectedPainAreas : ['Knee']
   );
@@ -83,13 +86,46 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
       ? safetyConditions
       : { Knee: 'current_discomfort' }
   );
-  const [isSubmitted, setIsSubmitted] = useState<boolean>(true);
+  const [painLevel, setPainLevel] = useState<number>(5);
+  const [painDescription, setPainDescription] = useState<string>('');
+  const [recentInjury, setRecentInjury] = useState<string>('');
+  const [selectedGoal, setSelectedGoal] = useState<string>('fat_loss');
+  const [showBodyMap, setShowBodyMap] = useState<boolean>(true);
+
+  // Backend Intelligence states
+  const [backendAnalysis, setBackendAnalysis] = useState<InjuryAnalyzeResponse | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [appliedNotice, setAppliedNotice] = useState<boolean>(false);
 
   const haptic = (style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
     if (Platform.OS !== 'web') {
       Haptics.impactAsync(style);
     }
+  };
+
+  // Convert InteractiveBodyMap names to BODY_AREAS IDs
+  const mapPointNameToAreaId = (pointName: string): string => {
+    const p = pointName.toLowerCase();
+    if (p.includes('knee')) return 'Knee';
+    if (p.includes('shoulder')) return 'Shoulder';
+    if (p.includes('back') || p.includes('spine')) return 'Back';
+    if (p.includes('neck') || p.includes('traps')) return 'Neck';
+    if (p.includes('elbow') || p.includes('arm')) return 'Wrist';
+    if (p.includes('ankle') || p.includes('foot')) return 'Ankle';
+    return 'Other';
+  };
+
+  // Convert BODY_AREAS to InteractiveBodyMap point names for visual highlights
+  const getMapPointsForAreas = (areas: string[]): string[] => {
+    const points: string[] = [];
+    if (areas.includes('Knee')) points.push('Left Knee', 'Right Knee');
+    if (areas.includes('Shoulder')) points.push('Left Shoulder', 'Right Shoulder');
+    if (areas.includes('Back')) points.push('Lower Back & Spine');
+    if (areas.includes('Neck')) points.push('Neck & Traps');
+    if (areas.includes('Wrist')) points.push('Left Elbow / Arm', 'Right Elbow / Arm');
+    if (areas.includes('Ankle')) points.push('Left Ankle / Foot', 'Right Ankle / Foot');
+    if (areas.includes('Other')) points.push('Chest / Sternum', 'Hips / Pelvis');
+    return points;
   };
 
   const handleToggleArea = (areaId: string) => {
@@ -106,30 +142,60 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
     }
   };
 
+  const handleToggleFromMap = (partName: string) => {
+    const areaId = mapPointNameToAreaId(partName);
+    handleToggleArea(areaId);
+  };
+
   const handleSetCondition = (areaId: string, level: ConditionLevel) => {
     haptic(Haptics.ImpactFeedbackStyle.Medium);
     setConditions({ ...conditions, [areaId]: level });
   };
 
-  // Evaluate Exercise Clearances dynamically
+  // Run Backend AI Analysis
+  const fetchBackendAnalysis = useCallback(async () => {
+    setIsAnalyzing(true);
+    try {
+      const primaryArea = (selectedAreas[0] || 'knee').toLowerCase();
+      const res = await InjuryService.analyzeInjury({
+        body_part: primaryArea,
+        pain_level: painLevel,
+        pain_description: painDescription || undefined,
+        recent_injury: recentInjury || undefined,
+        goal: selectedGoal,
+      });
+      setBackendAnalysis(res);
+    } catch (e) {
+      console.warn('Analysis error:', e);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [selectedAreas, painLevel, painDescription, recentInjury, selectedGoal]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchBackendAnalysis();
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [fetchBackendAnalysis]);
+
+  // Fallback clearances if backend analysis pending
   const getExerciseClearances = (): ExerciseClearance[] => {
+    if (backendAnalysis?.exercise_clearances && backendAnalysis.exercise_clearances.length > 0) {
+      return backendAnalysis.exercise_clearances;
+    }
+
     const hasKnee = selectedAreas.includes('Knee');
-    const kneeLvl = conditions['Knee'] || 'no_pain';
-
-    const hasShoulder = selectedAreas.includes('Shoulder');
-    const shoulderLvl = conditions['Shoulder'] || 'no_pain';
-
+    const kneeLvl = conditions['Knee'] || (painLevel >= 7 ? 'current_discomfort' : 'previous_injury');
     const hasBack = selectedAreas.includes('Back');
-    const backLvl = conditions['Back'] || 'no_pain';
-
-    const hasWrist = selectedAreas.includes('Wrist');
-    const hasAnkle = selectedAreas.includes('Ankle');
-    const hasNeck = selectedAreas.includes('Neck');
+    const backLvl = conditions['Back'] || (painLevel >= 7 ? 'current_discomfort' : 'previous_injury');
+    const hasShoulder = selectedAreas.includes('Shoulder');
+    const shoulderLvl = conditions['Shoulder'] || (painLevel >= 7 ? 'current_discomfort' : 'previous_injury');
 
     const results: ExerciseClearance[] = [];
 
     // 1. Barbell Squat
-    if (hasKnee && kneeLvl === 'current_discomfort') {
+    if (hasKnee && (kneeLvl === 'current_discomfort' || painLevel >= 7)) {
       results.push({
         name: 'Barbell Back Squat',
         target: 'Quads & Glutes',
@@ -138,7 +204,7 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
         alternative: 'High Box Squat',
         benefit: 'Limits joint flexion past 90° while maintaining full quad recruitment',
       });
-    } else if (hasKnee && kneeLvl === 'previous_injury') {
+    } else if (hasKnee) {
       results.push({
         name: 'Barbell Back Squat',
         target: 'Quads & Glutes',
@@ -157,7 +223,7 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
     }
 
     // 2. Romanian Deadlift
-    if (hasBack && backLvl === 'current_discomfort') {
+    if (hasBack && (backLvl === 'current_discomfort' || painLevel >= 7)) {
       results.push({
         name: 'Romanian Deadlift',
         target: 'Hamstrings & Lumbar',
@@ -166,7 +232,7 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
         alternative: 'Chest-Supported Row',
         benefit: 'Decompresses lumbar spine with zero axial torque',
       });
-    } else if (hasBack || hasKnee) {
+    } else if (hasBack) {
       results.push({
         name: 'Romanian Deadlift',
         target: 'Hamstrings & Lumbar',
@@ -184,8 +250,8 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
       });
     }
 
-    // 3. Overhead Shoulder Press
-    if (hasShoulder && shoulderLvl === 'current_discomfort') {
+    // 3. Overhead Press
+    if (hasShoulder && (shoulderLvl === 'current_discomfort' || painLevel >= 7)) {
       results.push({
         name: 'Overhead Barbell Press',
         target: 'Anterior Delts',
@@ -194,7 +260,7 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
         alternative: 'Incline Landmine Press',
         benefit: 'Preserves scapular rhythm at comfortable 45° angle',
       });
-    } else if (hasShoulder && shoulderLvl === 'previous_injury') {
+    } else if (hasShoulder) {
       results.push({
         name: 'Overhead Barbell Press',
         target: 'Anterior Delts',
@@ -212,61 +278,33 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
       });
     }
 
-    // 4. Dynamic Lunges
-    if (hasKnee || hasAnkle) {
-      results.push({
-        name: 'Walking Dynamic Lunges',
-        target: 'Quads & Balance',
-        status: 'CAUTION',
-        reason: 'Deceleration impact produces high patellar & Achilles shear.',
-        alternative: 'Reverse Static Lunge',
-        benefit: 'Eliminates deceleration force on patellar tendon',
-      });
-    } else {
-      results.push({
-        name: 'Walking Dynamic Lunges',
-        target: 'Quads & Balance',
-        status: 'SAFE',
-        reason: 'Knee and ankle stability cleared for explosive dynamic lunging.',
-      });
-    }
-
-    // 5. Dumbbell Bench Press
-    if (hasWrist) {
-      results.push({
-        name: 'Barbell Flat Bench',
-        target: 'Chest & Triceps',
-        status: 'CAUTION',
-        reason: 'Fixed bar position produces ulnar wrist extension strain.',
-        alternative: 'Neutral Grip DB Bench',
-        benefit: 'Allows natural wrist stack over forearm',
-      });
-    } else {
-      results.push({
-        name: 'Dumbbell Bench Press',
-        target: 'Pectorals & Triceps',
-        status: 'SAFE',
-        reason: 'Optimal horizontal pressing mechanics with no joint bottlenecks.',
-      });
-    }
-
     return results;
   };
 
   const clearances = getExerciseClearances();
 
-  const handleApplyToWorkouts = () => {
+  const handleApplyToWorkouts = async () => {
     if (Platform.OS !== 'web') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
-    // Update store state
-    setPainSelection(selectedAreas, 'moderate');
-    selectedAreas.forEach((area) => {
-      setSafetyCondition(area, conditions[area] || 'previous_injury');
+
+    const primaryArea = selectedAreas[0] || 'knee';
+
+    // 1. Save profile to backend
+    await InjuryService.saveInjuryProfile({
+      body_part: primaryArea.toLowerCase(),
+      body_parts: selectedAreas,
+      pain_level: painLevel,
+      pain_description: painDescription || undefined,
+      recent_injury: recentInjury || undefined,
+      goal: selectedGoal,
     });
 
-    // Synchronize injury screening with AI backend
-    AiService.screenInjury(selectedAreas, 'moderate', 'joint_strain');
+    // 2. Update local store
+    setPainSelection(selectedAreas, painLevel >= 7 ? 'severe' : painLevel >= 4 ? 'moderate' : 'mild');
+    selectedAreas.forEach((area) => {
+      setSafetyCondition(area, conditions[area] || (painLevel >= 7 ? 'current_discomfort' : 'previous_injury'));
+    });
 
     setAppliedNotice(true);
     setTimeout(() => {
@@ -274,6 +312,8 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
       navigation.goBack();
     }, 1200);
   };
+
+  const cautionLevel = backendAnalysis?.caution_level || (painLevel >= 7 ? 'high' : painLevel >= 4 ? 'moderate' : 'low');
 
   return (
     <ScreenContainer>
@@ -291,8 +331,12 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
             <ArrowLeft size={20} color={colors.textPrimary} />
           </TouchableOpacity>
           <View style={styles.headerTitleWrap}>
-            <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>{t('injuryCoachTitle') || 'Injury Prevention Coach'}</Text>
-            <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>Kinetic Safety Guard</Text>
+            <Text style={[styles.headerTitle, { color: colors.textPrimary }]}>
+              {t('injuryCoachTitle') || 'Injury Prevention Coach'}
+            </Text>
+            <Text style={[styles.headerSubtitle, { color: colors.textSecondary }]}>
+              Kinetic Safety Guard
+            </Text>
           </View>
           <View style={{ width: 40 }} />
         </View>
@@ -301,17 +345,57 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
         <View style={styles.headlineBlock}>
           <View style={styles.badgeRow}>
             <Badge label="AI FORM GUARD ACTIVE" variant="success" size="sm" />
-            <Badge label="BIOMECHANIC CLEARANCE" variant="primary" size="sm" />
+            <Badge
+              label={`CAUTION LEVEL: ${cautionLevel.toUpperCase()}`}
+              variant={cautionLevel === 'high' ? 'danger' : cautionLevel === 'moderate' ? 'warning' : 'primary'}
+              size="sm"
+            />
           </View>
 
-          <Text style={[styles.headline, { color: colors.textPrimary }]}>{t('letsKeepYouSafe') || "Let's keep you safe"}</Text>
+          <Text style={[styles.headline, { color: colors.textPrimary }]}>
+            {t('letsKeepYouSafe') || "Let's keep you safe"}
+          </Text>
           <Text style={[styles.subtext, { color: colors.textSecondary }]}>
-            {t('injuryCoachDesc') || 'Personalize your AI vision form guard and joint protection. We dynamically adjust rep depth, barbell velocity limits, and recommend safe alternatives.'}
+            Select your sensitive body areas and discomfort level. FitVerse dynamically screens exercises, suggests low-impact alternatives, and guards joint safety.
           </Text>
         </View>
 
         {/* ============================================================ */}
-        {/* SECTION 1: BODY AREAS MULTI-SELECT & SEGMENTED CONTROLS      */}
+        {/* VIEW TOGGLE: INTERACTIVE BODY MAP / QUICK CARDS              */}
+        {/* ============================================================ */}
+        <View style={styles.tabToggleRow}>
+          <TouchableOpacity
+            style={[styles.tabButton, showBodyMap && styles.tabButtonActive]}
+            onPress={() => setShowBodyMap(true)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.tabButtonText, showBodyMap && styles.tabButtonTextActive]}>
+              Interactive Body Map
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabButton, !showBodyMap && styles.tabButtonActive]}
+            onPress={() => setShowBodyMap(false)}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.tabButtonText, !showBodyMap && styles.tabButtonTextActive]}>
+              Joint Cards ({selectedAreas.length})
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* INTERACTIVE BODY MAP COMPONENT */}
+        {showBodyMap && (
+          <GlassCard style={styles.bodyMapCard}>
+            <InteractiveBodyMap
+              selectedParts={getMapPointsForAreas(selectedAreas)}
+              onTogglePart={handleToggleFromMap}
+            />
+          </GlassCard>
+        )}
+
+        {/* ============================================================ */}
+        {/* SECTION 1: BODY AREAS SELECTION                              */}
         {/* ============================================================ */}
         <View style={styles.sectionHeaderRow}>
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>SENSITIVE JOINT ZONES</Text>
@@ -363,7 +447,9 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
                       >
                         {area.name}
                       </Text>
-                      <Text style={[styles.areaSubtext, { color: colors.textSecondary }]}>{area.subtext}</Text>
+                      <Text style={[styles.areaSubtext, { color: colors.textSecondary }]}>
+                        {area.subtext}
+                      </Text>
                     </View>
                   </View>
 
@@ -425,10 +511,190 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
         </View>
 
         {/* ============================================================ */}
-        {/* SECTION 2: RESULTS VIEW (EXERCISE STATUS & ALTERNATIVES)      */}
+        {/* SECTION 2: PAIN LEVEL SCALE (0-10)                           */}
         {/* ============================================================ */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>BIOMECHANIC EXERCISE CLEARANCE</Text>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>PAIN LEVEL SCALE (0 - 10)</Text>
+          <Badge
+            label={`LEVEL ${painLevel}/10: ${painLevel >= 7 ? 'SEVERE' : painLevel >= 4 ? 'MODERATE' : 'MILD'}`}
+            variant={painLevel >= 7 ? 'danger' : painLevel >= 4 ? 'warning' : 'success'}
+            size="sm"
+          />
+        </View>
+
+        <GlassCard style={styles.painCard}>
+          <View style={styles.painPillRow}>
+            {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((level) => {
+              const isSelected = painLevel === level;
+              const isHigh = level >= 7;
+              const isMod = level >= 4 && level < 7;
+              const pillColor = isHigh ? Colors.danger : isMod ? Colors.warning : Colors.success;
+
+              return (
+                <TouchableOpacity
+                  key={level}
+                  style={[
+                    styles.painPill,
+                    isSelected && {
+                      backgroundColor: pillColor,
+                      borderColor: pillColor,
+                      transform: [{ scale: 1.08 }],
+                    },
+                  ]}
+                  onPress={() => {
+                    haptic(Haptics.ImpactFeedbackStyle.Light);
+                    setPainLevel(level);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.painPillText,
+                      isSelected && { color: '#FFFFFF', fontWeight: '900' },
+                    ]}
+                  >
+                    {level}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Severe Pain Warning Notice */}
+          {painLevel >= 7 && (
+            <View style={styles.severeNoticeBox}>
+              <AlertTriangle size={16} color={Colors.danger} />
+              <Text style={styles.severeNoticeText}>
+                ⚠️ Pain level 7 or higher indicates acute irritation. Cease high-load exercises and consult a healthcare professional.
+              </Text>
+            </View>
+          )}
+        </GlassCard>
+
+        {/* ============================================================ */}
+        {/* SECTION 3: QUALITATIVE DETAILS (DESCRIPTION & RECENT INJURY)  */}
+        {/* ============================================================ */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>INJURY HISTORY & DETAILS</Text>
+          {isAnalyzing && <ActivityIndicator size="small" color={colors.primary} />}
+        </View>
+
+        <GlassCard style={styles.inputCard}>
+          <View style={styles.inputGroup}>
+            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Pain Description:</Text>
+            <TextInput
+              style={[
+                styles.textInput,
+                { color: colors.textPrimary, borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F5F5F5' },
+              ]}
+              placeholder="e.g. Sharp pinch at bottom of squat, dull ache after running"
+              placeholderTextColor={colors.textMuted}
+              value={painDescription}
+              onChangeText={setPainDescription}
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Recent Injury or Trauma:</Text>
+            <TextInput
+              style={[
+                styles.textInput,
+                { color: colors.textPrimary, borderColor: colors.border, backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F5F5F5' },
+              ]}
+              placeholder="e.g. Mild meniscus sprain 4 weeks ago, rotator cuff strain"
+              placeholderTextColor={colors.textMuted}
+              value={recentInjury}
+              onChangeText={setRecentInjury}
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Exercise Goal:</Text>
+            <View style={styles.goalRow}>
+              {GOAL_OPTIONS.map((g) => {
+                const isSelected = selectedGoal === g.id;
+                return (
+                  <TouchableOpacity
+                    key={g.id}
+                    style={[
+                      styles.goalPill,
+                      isSelected && {
+                        backgroundColor: colors.primary,
+                        borderColor: colors.primary,
+                      },
+                    ]}
+                    onPress={() => {
+                      haptic();
+                      setSelectedGoal(g.id);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.goalPillText,
+                        isSelected && { color: '#FFFFFF', fontWeight: '800' },
+                      ]}
+                    >
+                      {g.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </GlassCard>
+
+        {/* ============================================================ */}
+        {/* SECTION 4: EXERCISES TO AVOID OR MODIFY                      */}
+        {/* ============================================================ */}
+        {backendAnalysis?.avoid_or_modify && backendAnalysis.avoid_or_modify.length > 0 && (
+          <>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                EXERCISES TO AVOID OR MODIFY
+              </Text>
+              <Badge label={`${backendAnalysis.avoid_or_modify.length} RESTRICTED`} variant="danger" size="sm" />
+            </View>
+
+            <GlassCard style={styles.avoidCard}>
+              {backendAnalysis.avoid_or_modify.map((item, idx) => (
+                <View key={idx} style={styles.avoidRow}>
+                  <AlertTriangle size={14} color={Colors.danger} />
+                  <Text style={[styles.avoidText, { color: colors.textPrimary }]}>{item}</Text>
+                </View>
+              ))}
+            </GlassCard>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* SECTION 5: LOWER-IMPACT ALTERNATIVES                         */}
+        {/* ============================================================ */}
+        {backendAnalysis?.lower_impact_alternatives && backendAnalysis.lower_impact_alternatives.length > 0 && (
+          <>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+                SUGGESTED LOWER-IMPACT ALTERNATIVES
+              </Text>
+              <Badge label="SAFE REPLACEMENTS" variant="success" size="sm" />
+            </View>
+
+            <GlassCard style={styles.altCardList}>
+              {backendAnalysis.lower_impact_alternatives.map((alt, idx) => (
+                <View key={idx} style={styles.altItemRow}>
+                  <Repeat size={14} color={Colors.success} />
+                  <Text style={[styles.altItemText, { color: colors.textPrimary }]}>{alt}</Text>
+                </View>
+              ))}
+            </GlassCard>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* SECTION 6: BIOMECHANIC EXERCISE CLEARANCE LIST               */}
+        {/* ============================================================ */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>BIOMECHANIC CLEARANCE MATRIX</Text>
           <Badge
             label={`${num(clearances.filter((c) => c.status === 'BLOCK').length)} BLOCKED`}
             variant={clearances.some((c) => c.status === 'BLOCK') ? 'danger' : 'success'}
@@ -458,7 +724,6 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
 
                 <Text style={[styles.exerciseReason, { color: colors.textSecondary }]}>{ex.reason}</Text>
 
-                {/* Suggested Alternative Chip on the Same Row */}
                 {ex.alternative && (
                   <View style={styles.altRow}>
                     <View style={[styles.altChip, { backgroundColor: isDark ? 'rgba(34, 255, 176, 0.12)' : '#EBF3EA' }]}>
@@ -477,7 +742,27 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
         </View>
 
         {/* ============================================================ */}
-        {/* SECTION 3: VISIBLE DISCLAIMER CARD                           */}
+        {/* SECTION 7: GENERAL RECOMMENDATIONS                           */}
+        {/* ============================================================ */}
+        {backendAnalysis?.general_recommendations && backendAnalysis.general_recommendations.length > 0 && (
+          <>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>COACHING RECOMMENDATIONS</Text>
+            </View>
+
+            <GlassCard style={styles.recCard}>
+              {backendAnalysis.general_recommendations.map((rec, idx) => (
+                <View key={idx} style={styles.recRow}>
+                  <Info size={14} color={colors.primary} />
+                  <Text style={[styles.recText, { color: colors.textPrimary }]}>{rec}</Text>
+                </View>
+              ))}
+            </GlassCard>
+          </>
+        )}
+
+        {/* ============================================================ */}
+        {/* SECTION 8: MANDATORY MEDICAL DISCLAIMER CARD                 */}
         {/* ============================================================ */}
         <GlassCard style={styles.disclaimerCard}>
           <View style={styles.disclaimerHeader}>
@@ -485,14 +770,13 @@ export const InjuryCoachScreen: React.FC<{ navigation: any }> = ({ navigation })
             <Text style={[styles.disclaimerTitle, { color: colors.textPrimary }]}>Medical Guidance Disclaimer</Text>
           </View>
           <Text style={[styles.disclaimerText, { color: colors.textSecondary }]}>
-            This tool does not diagnose medical conditions. Consult a professional for
-            persistent pain or acute structural symptoms. FitVerse AI adapts workout
-            recommendations based on user-reported mobility constraints.
+            {backendAnalysis?.medical_disclaimer ||
+              'FitVerse Injury Prevention Coach provides general fitness guidance and exercise modifications for educational purposes only. It does not diagnose medical conditions or prescribe clinical treatments. If you experience severe, sharp, or persistent pain, discontinue exercise immediately and seek professional medical evaluation from a licensed physician or physical therapist.'}
           </Text>
         </GlassCard>
 
         {/* ============================================================ */}
-        {/* SECTION 4: APPLY TO MY WORKOUTS BUTTON                       */}
+        {/* SECTION 9: APPLY TO MY WORKOUTS BUTTON                       */}
         {/* ============================================================ */}
         <View style={styles.applyWrapper}>
           <GradientButton
@@ -560,6 +844,40 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textSecondary,
     lineHeight: 19,
+  },
+
+  // Toggle Row
+  tabToggleRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    alignItems: 'center',
+  },
+  tabButtonActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  tabButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  tabButtonTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+
+  bodyMapCard: {
+    padding: 12,
+    alignItems: 'center',
   },
 
   sectionHeaderRow: {
@@ -680,6 +998,124 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  // Pain Level Selector
+  painCard: {
+    padding: 12,
+    gap: 12,
+  },
+  painPillRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  painPill: {
+    width: 28,
+    height: 32,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  painPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textSecondary,
+  },
+  severeNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(255, 77, 77, 0.15)',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.danger,
+  },
+  severeNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    color: Colors.danger,
+    lineHeight: 15,
+    fontWeight: '600',
+  },
+
+  // Form Input Card
+  inputCard: {
+    padding: 14,
+    gap: 12,
+  },
+  inputGroup: {
+    gap: 6,
+  },
+  inputLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 12,
+  },
+  goalRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  goalPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  goalPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.textSecondary,
+  },
+
+  // Avoid Card
+  avoidCard: {
+    padding: 12,
+    gap: 8,
+    backgroundColor: 'rgba(255, 77, 77, 0.08)',
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.danger,
+  },
+  avoidRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  avoidText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // Alternatives Card
+  altCardList: {
+    padding: 12,
+    gap: 8,
+    backgroundColor: 'rgba(34, 255, 176, 0.08)',
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.success,
+  },
+  altItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  altItemText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
   // Exercise Clearances
   clearanceList: {
     gap: 10,
@@ -741,6 +1177,22 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginTop: 2,
     lineHeight: 15,
+  },
+
+  // Recommendations Card
+  recCard: {
+    padding: 12,
+    gap: 8,
+  },
+  recRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  recText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
   },
 
   // Disclaimer Card

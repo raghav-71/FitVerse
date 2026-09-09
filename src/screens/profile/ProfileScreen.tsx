@@ -66,6 +66,10 @@ export const ProfileScreen: React.FC = () => {
   const equipmentPreferences = useAuthStore((state) => state.equipmentPreferences);
   const heightCm = useAuthStore((state) => state.heightCm);
   const weightKg = useAuthStore((state) => state.weightKg);
+  const age = useAuthStore((state) => state.age);
+  const gender = useAuthStore((state) => state.gender);
+  const targetWeightKg = useAuthStore((state) => state.targetWeightKg);
+  const dietPreference = useAuthStore((state) => state.dietPreference);
   const isLeaderboardPublic = useAuthStore((state) => state.isLeaderboardPublic);
   const isDataSharingEnabled = useAuthStore((state) => state.isDataSharingEnabled);
   const updateProfileDetails = useAuthStore((state) => state.updateProfileDetails);
@@ -96,6 +100,10 @@ export const ProfileScreen: React.FC = () => {
   const [tempEquipment, setTempEquipment] = useState<string[]>(equipmentPreferences);
   const [tempHeight, setTempHeight] = useState(heightCm);
   const [tempWeight, setTempWeight] = useState(weightKg);
+  const [tempAge, setTempAge] = useState(age);
+  const [tempGender, setTempGender] = useState(gender);
+  const [tempTargetWeight, setTempTargetWeight] = useState(targetWeightKg);
+  const [tempDietPreference, setTempDietPreference] = useState(dietPreference);
 
   const hapticFeedback = (style: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light) => {
     if (Platform.OS !== 'web') {
@@ -137,6 +145,10 @@ export const ProfileScreen: React.FC = () => {
     setTempEquipment([...equipmentPreferences]);
     setTempHeight(heightCm);
     setTempWeight(weightKg);
+    setTempAge(age);
+    setTempGender(gender);
+    setTempTargetWeight(targetWeightKg);
+    setTempDietPreference(dietPreference);
     setEditingField(field);
   };
 
@@ -149,6 +161,10 @@ export const ProfileScreen: React.FC = () => {
       equipmentPreferences: tempEquipment,
       heightCm: tempHeight,
       weightKg: tempWeight,
+      age: tempAge,
+      gender: tempGender,
+      targetWeightKg: tempTargetWeight,
+      dietPreference: tempDietPreference,
     });
     setEditingField(null);
   };
@@ -446,6 +462,50 @@ export const ProfileScreen: React.FC = () => {
                 <Text style={[styles.detailRowLabel, { color: colors.textPrimary }]}>{t('heightAndWeight') || 'Height & Weight'}</Text>
                 <Text style={[styles.detailRowValue, { color: colors.textSecondary }]}>
                   {num(heightCm)} cm · {num(weightKg.toFixed(1))} kg
+                </Text>
+              </View>
+            </View>
+            <ChevronRight size={18} color={Colors.textSecondary} />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          {/* Age & Gender */}
+          <TouchableOpacity
+            style={styles.detailRow}
+            activeOpacity={0.7}
+            onPress={() => openEditor('measurements')}
+          >
+            <View style={styles.detailRowLeft}>
+              <View style={[styles.detailIcon, { backgroundColor: `${Colors.accentSky}18` }]}>
+                <Flame size={18} color={Colors.accentSky} />
+              </View>
+              <View>
+                <Text style={[styles.detailRowLabel, { color: colors.textPrimary }]}>Age & Gender</Text>
+                <Text style={[styles.detailRowValue, { color: colors.textSecondary }]}>
+                  {num(age)} yrs · {gender}
+                </Text>
+              </View>
+            </View>
+            <ChevronRight size={18} color={Colors.textSecondary} />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          {/* Target Weight & Diet Preference */}
+          <TouchableOpacity
+            style={styles.detailRow}
+            activeOpacity={0.7}
+            onPress={() => openEditor('measurements')}
+          >
+            <View style={styles.detailRowLeft}>
+              <View style={[styles.detailIcon, { backgroundColor: `${Colors.neonGreen}18` }]}>
+                <Crosshair size={18} color={Colors.neonGreen} />
+              </View>
+              <View>
+                <Text style={[styles.detailRowLabel, { color: colors.textPrimary }]}>Target & Diet</Text>
+                <Text style={[styles.detailRowValue, { color: colors.textSecondary }]}>
+                  Goal: {num(targetWeightKg.toFixed(1))} kg · {dietPreference}
                 </Text>
               </View>
             </View>
@@ -895,9 +955,68 @@ export const ProfileScreen: React.FC = () => {
               </View>
             )}
 
-            {/* 5. Height & Weight Steppers */}
+            {/* 5. Physical Body & Health Measurements */}
             {editingField === 'measurements' && (
               <View style={styles.measurementsBox}>
+                {/* Age */}
+                <View style={styles.stepperRow}>
+                  <Text style={styles.stepperLabel}>Age (Years)</Text>
+                  <View style={styles.stepperControls}>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() => {
+                        hapticFeedback();
+                        setTempAge((a) => Math.max(14, a - 1));
+                      }}
+                    >
+                      <Minus size={16} color={Colors.textPrimary} />
+                    </TouchableOpacity>
+                    <Text style={styles.stepperValue}>{tempAge} yrs</Text>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() => {
+                        hapticFeedback();
+                        setTempAge((a) => Math.min(99, a + 1));
+                      }}
+                    >
+                      <Plus size={16} color={Colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Gender Chips */}
+                <View style={{ marginVertical: 8 }}>
+                  <Text style={[styles.stepperLabel, { marginBottom: 6 }]}>Gender</Text>
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    {['Male', 'Female', 'Other'].map((g) => {
+                      const isSelected = tempGender.toLowerCase() === g.toLowerCase();
+                      return (
+                        <TouchableOpacity
+                          key={g}
+                          onPress={() => {
+                            hapticFeedback();
+                            setTempGender(g);
+                          }}
+                          style={[
+                            styles.chipPill,
+                            { flex: 1, alignItems: 'center', justifyContent: 'center' },
+                            isSelected && styles.chipPillSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.chipPillText,
+                              isSelected && styles.chipPillTextSelected,
+                            ]}
+                          >
+                            {g}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
                 {/* Height */}
                 <View style={styles.stepperRow}>
                   <Text style={styles.stepperLabel}>Height</Text>
@@ -924,15 +1043,15 @@ export const ProfileScreen: React.FC = () => {
                   </View>
                 </View>
 
-                {/* Weight */}
+                {/* Current Weight */}
                 <View style={styles.stepperRow}>
-                  <Text style={styles.stepperLabel}>Weight</Text>
+                  <Text style={styles.stepperLabel}>Current Weight</Text>
                   <View style={styles.stepperControls}>
                     <TouchableOpacity
                       style={styles.stepperBtn}
                       onPress={() => {
                         hapticFeedback();
-                        setTempWeight((w) => Math.max(30, +(w - 0.2).toFixed(1)));
+                        setTempWeight((w) => Math.max(30, +(w - 0.5).toFixed(1)));
                       }}
                     >
                       <Minus size={16} color={Colors.textPrimary} />
@@ -942,11 +1061,70 @@ export const ProfileScreen: React.FC = () => {
                       style={styles.stepperBtn}
                       onPress={() => {
                         hapticFeedback();
-                        setTempWeight((w) => Math.min(200, +(w + 0.2).toFixed(1)));
+                        setTempWeight((w) => Math.min(200, +(w + 0.5).toFixed(1)));
                       }}
                     >
                       <Plus size={16} color={Colors.textPrimary} />
                     </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Target Weight */}
+                <View style={styles.stepperRow}>
+                  <Text style={styles.stepperLabel}>Target Weight</Text>
+                  <View style={styles.stepperControls}>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() => {
+                        hapticFeedback();
+                        setTempTargetWeight((w) => Math.max(30, +(w - 0.5).toFixed(1)));
+                      }}
+                    >
+                      <Minus size={16} color={Colors.textPrimary} />
+                    </TouchableOpacity>
+                    <Text style={styles.stepperValue}>{tempTargetWeight.toFixed(1)} kg</Text>
+                    <TouchableOpacity
+                      style={styles.stepperBtn}
+                      onPress={() => {
+                        hapticFeedback();
+                        setTempTargetWeight((w) => Math.min(200, +(w + 0.5).toFixed(1)));
+                      }}
+                    >
+                      <Plus size={16} color={Colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Diet Preference Chips */}
+                <View style={{ marginTop: 8 }}>
+                  <Text style={[styles.stepperLabel, { marginBottom: 6 }]}>Diet Preference</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {['Vegetarian', 'Non-Vegetarian', 'Vegan', 'Eggetarian'].map((pref) => {
+                      const isSelected = tempDietPreference.toLowerCase() === pref.toLowerCase();
+                      return (
+                        <TouchableOpacity
+                          key={pref}
+                          onPress={() => {
+                            hapticFeedback();
+                            setTempDietPreference(pref);
+                          }}
+                          style={[
+                            styles.chipPill,
+                            isSelected && styles.chipPillSelected,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.chipPillText,
+                              isSelected && styles.chipPillTextSelected,
+                            ]}
+                          >
+                            {pref}
+                          </Text>
+                          {isSelected && <Check size={13} color="#FFFFFF" />}
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 </View>
               </View>

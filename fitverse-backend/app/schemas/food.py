@@ -71,3 +71,52 @@ class DailyNutritionSummary(BaseModel):
     water_target: int
     meals_count: int
 
+# Photo & Vision Analysis Schemas (Phase 6)
+class FoodImageUploadRequest(BaseModel):
+    image_base64: str = Field(..., description="Base64-encoded image string")
+    filename: Optional[str] = "meal_capture.jpg"
+    consent_to_store: bool = Field(default=False, description="Whether user explicitly consents to storage")
+
+class FoodImageUploadResponse(BaseModel):
+    success: bool = True
+    image_id: str
+    message: str
+    is_temporary: bool = True
+    storage_notice: str = "Image held in secure temporary cache. Not permanently stored without explicit consent."
+
+class DetectedFoodItem(BaseModel):
+    name: str = Field(..., example="Paneer Curry")
+    quantity_estimate: str = Field(..., example="150g")
+    quantity_grams: float = Field(default=150.0, example=150.0)
+    calories: int = Field(..., example=350)
+    protein: float = Field(..., example=22.0)
+    carbs: float = Field(..., example=12.0)
+    fat: float = Field(..., example=24.0)
+    fiber: float = Field(default=4.0, example=4.0)
+    confidence: float = Field(..., ge=0.0, le=1.0, example=0.82)
+
+class FoodImageAnalyzeRequest(BaseModel):
+    image_id: Optional[str] = None
+    image_base64: Optional[str] = None
+    meal_hint: Optional[str] = None
+    meal_type: Optional[MealType] = None
+
+class FoodImageAnalyzeResponse(BaseModel):
+    success: bool = True
+    primary_food: str = Field(..., example="Paneer Curry")
+    estimated_quantity: str = Field(..., example="150g")
+    calories: int = Field(..., example=350)
+    protein: float = Field(..., example=22.0)
+    carbs: float = Field(..., example=12.0)
+    fat: float = Field(..., example=24.0)
+    fiber: float = Field(default=4.0, example=4.0)
+    confidence: float = Field(..., ge=0.0, le=1.0, example=0.82)
+    confidence_percentage: int = Field(..., example=82)
+    is_low_confidence: bool = Field(default=False)
+    detected_meal_type: MealType = Field(default="Lunch")
+    detected_items: List[DetectedFoodItem] = []
+    disclaimer: str = "Nutrition values are estimated."
+    review_prompt: Optional[str] = None
+    image_id: Optional[str] = None
+
+

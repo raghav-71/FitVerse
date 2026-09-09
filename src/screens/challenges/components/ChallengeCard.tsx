@@ -114,13 +114,14 @@ export const ChallengeCard: React.FC<ChallengeCardProps> = ({
   );
   const progressPercent = Math.round(progressRatio * 100);
 
-  const isCompleted = challenge.completed || progressRatio >= 1;
+  const isClaimed = !!challenge.completed;
+  const canClaim = !isClaimed && progressRatio >= 1;
 
   return (
     <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
       <GlassCard
-        variant={isCompleted ? 'glow' : challenge.joined ? 'accent' : 'default'}
-        style={[styles.card, isCompleted && styles.completedCard]}
+        variant={isClaimed ? 'glow' : canClaim ? 'glow' : challenge.joined ? 'accent' : 'default'}
+        style={[styles.card, isClaimed && styles.completedCard]}
         padding={16}
       >
         <TouchableOpacity
@@ -186,7 +187,7 @@ export const ChallengeCard: React.FC<ChallengeCardProps> = ({
           </View>
 
           {/* Progress Section (if joined or completed) */}
-          {(challenge.joined || isCompleted) && (
+          {(challenge.joined || isClaimed || canClaim) && (
             <View style={styles.progressSection}>
               <View style={styles.progressHeader}>
                 <Text style={[styles.progressLabel, { color: colors.textSecondary }]}>
@@ -198,7 +199,7 @@ export const ChallengeCard: React.FC<ChallengeCardProps> = ({
               </View>
               <ProgressBar
                 progress={progressRatio}
-                color={isCompleted ? colors.neonGreen : colors.primary}
+                color={isClaimed ? colors.neonGreen : canClaim ? colors.warning : colors.primary}
                 height={6}
               />
             </View>
@@ -206,13 +207,20 @@ export const ChallengeCard: React.FC<ChallengeCardProps> = ({
 
           {/* Action Button Row */}
           <View style={styles.actionRow}>
-            {isCompleted ? (
+            {isClaimed ? (
               <View style={styles.completedBadgeRow}>
                 <CheckCircle2 size={16} color={colors.neonGreen} />
                 <Text style={[styles.completedText, { color: colors.neonGreen }]}>
                   {t('questComplete') || 'Quest Complete • Rewards Claimed'}
                 </Text>
               </View>
+            ) : canClaim ? (
+              <GradientButton
+                title={`Claim Reward (+${challenge.rewardXp} XP)`}
+                onPress={() => onClaimReward?.(challenge.id)}
+                size="sm"
+                fullWidth
+              />
             ) : challenge.joined ? (
               <View style={styles.inProgressRow}>
                 <View style={styles.inProgressBadge}>

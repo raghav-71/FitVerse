@@ -1,12 +1,18 @@
 import { create } from 'zustand';
 import { ActivityService, FitScoreData } from '../services/api/activityService';
+import { WorkoutApi } from '../services/api/workout';
 
 export interface DailyActivityState {
-  // Exercise
+  // Exercise & Workouts
   exerciseLogged: boolean;
   loggedActivities: string[];
   weekWorkoutsCount: number;
   streakDays: number;
+  hasWorkedOutToday: boolean;
+  totalWorkoutsToday: number;
+  todayWorkoutDurationMinutes: number;
+  todayWorkoutCaloriesBurned: number;
+  totalPastWorkouts: number;
   toggleActivity: (activity: string) => void;
   logExercise: (activities?: string[]) => void;
 
@@ -32,6 +38,10 @@ export interface DailyActivityState {
   setTargetWeight: (weight: number) => void;
   setHeight: (height: number) => void;
 
+  // Steps (Activity)
+  steps: number;
+  stepsTarget: number;
+
   // Fit Score System
   fitScoreData: FitScoreData | null;
   fetchFitScore: () => Promise<FitScoreData | null>;
@@ -41,11 +51,20 @@ export interface DailyActivityState {
 }
 
 export const useDailyActivityStore = create<DailyActivityState>((set, get) => ({
+  // Steps
+  steps: 7420,
+  stepsTarget: 10000,
+
   // Exercise
-  exerciseLogged: true,
-  loggedActivities: ['Gym', 'Home Workout'],
-  weekWorkoutsCount: 6,
-  streakDays: 18,
+  exerciseLogged: false,
+  loggedActivities: [],
+  weekWorkoutsCount: 0,
+  streakDays: 0,
+  hasWorkedOutToday: false,
+  totalWorkoutsToday: 0,
+  todayWorkoutDurationMinutes: 0,
+  todayWorkoutCaloriesBurned: 0,
+  totalPastWorkouts: 0,
   toggleActivity: (activity: string) =>
     set((state) => {
       const exists = state.loggedActivities.includes(activity);
@@ -148,11 +167,13 @@ export const useDailyActivityStore = create<DailyActivityState>((set, get) => ({
   // Sync state from backend
   syncWithBackend: async () => {
     try {
-      const [summary, waterData, weightHistory, fitScore] = await Promise.all([
+      const [summary, waterData, weightHistory, fitScore, todayWorkouts, workoutHistory] = await Promise.all([
         ActivityService.getDailySummary(),
         ActivityService.getTodayWater(),
         ActivityService.getWeightHistory(),
         ActivityService.getFitScore(),
+        WorkoutApi.getTodayWorkouts().catch(() => null),
+        WorkoutApi.getWorkoutHistory().catch(() => []),
       ]);
 
       if (summary) {
@@ -161,6 +182,22 @@ export const useDailyActivityStore = create<DailyActivityState>((set, get) => ({
           loggedActivities: summary.logged_activities || get().loggedActivities,
           weekWorkoutsCount: summary.week_workouts_count ?? get().weekWorkoutsCount,
           streakDays: summary.streak_days ?? get().streakDays,
+        });
+      }
+
+      if (todayWorkouts) {
+        const totalToday = todayWorkouts.total_workouts || 0;
+        set({
+          hasWorkedOutToday: totalToday > 0,
+          totalWorkoutsToday: totalToday,
+          todayWorkoutDurationMinutes: todayWorkouts.total_duration_minutes || 0,
+          todayWorkoutCaloriesBurned: todayWorkouts.total_calories_burned || 0,
+        });
+      }
+
+      if (Array.isArray(workoutHistory)) {
+        set({
+          totalPastWorkouts: workoutHistory.length,
         });
       }
 

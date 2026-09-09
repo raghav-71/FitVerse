@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import auth, users, food, water, workout, progress, stress, sleep, ai, weight, activity, nutrition
+from app.api import auth, users, food, water, workout, progress, stress, sleep, ai, weight, activity, nutrition, pose, injury, gamification
 from app.schemas.common import APIStatusResponse
 
 api_router = APIRouter()
@@ -24,7 +24,11 @@ async def get_api_status():
             "progress": "active",
             "stress": "active",
             "sleep": "active",
-            "ai": "active"
+            "ai": "active",
+            "pose": "active",
+            "injury": "active",
+            "gamification": "active",
+            "leaderboard": "active"
         }
     )
 
@@ -41,5 +45,9 @@ api_router.include_router(progress.router, prefix="/progress", tags=["Progress &
 api_router.include_router(stress.router, prefix="/stress", tags=["Stress & Recovery"])
 api_router.include_router(sleep.router, prefix="/sleep", tags=["Sleep Tracking"])
 api_router.include_router(ai.router, prefix="/ai", tags=["AI Biomechanical & Nutrition Services"])
+api_router.include_router(pose.router, prefix="/pose", tags=["Pose Detection & Biomechanics"])
+api_router.include_router(injury.router, prefix="/injury", tags=["Injury Prevention Coach"])
+api_router.include_router(gamification.router, prefix="/gamification", tags=["Gamification, XP & Challenges"])
+api_router.include_router(gamification.leaderboard_router, prefix="/leaderboard", tags=["Leaderboard Arena"])
 
 

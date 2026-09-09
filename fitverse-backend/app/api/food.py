@@ -8,8 +8,13 @@ from app.schemas.food import (
     FoodLogCreate,
     FoodLogResponse,
     DailyNutritionSummary,
+    FoodImageUploadRequest,
+    FoodImageUploadResponse,
+    FoodImageAnalyzeRequest,
+    FoodImageAnalyzeResponse,
 )
 from app.services.food_nlp_service import food_nlp_service
+from app.services.food_vision_service import food_vision_service
 from app.database.supabase import get_supabase
 from app.core.logging import logger
 
@@ -74,6 +79,40 @@ DEV_MEALS_STORE: List[Dict[str, Any]] = [
 async def analyze_food(payload: AnalyzeFoodRequest):
     return food_nlp_service.analyze_natural_language(payload.text)
 
+# 1b. POST /api/v1/food/upload
+@router.post(
+    "/upload",
+    response_model=FoodImageUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload Food Photo",
+    description="Accepts meal photo for secure temporary processing. Images are not permanently stored without explicit consent."
+)
+async def upload_food_image(
+    payload: FoodImageUploadRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    user_id = current_user.get("id", "usr_001")
+    return food_vision_service.store_temporary_image(
+        image_base64=payload.image_base64,
+        user_id=user_id,
+        filename=payload.filename,
+        consent_to_store=payload.consent_to_store,
+    )
+
+# 1c. POST /api/v1/food/analyze-image
+@router.post(
+    "/analyze-image",
+    response_model=FoodImageAnalyzeResponse,
+    summary="AI Food Photo Nutrition Analysis",
+    description="Multimodal computer vision analysis of food photo with Indian meal recognition, portion estimation, and macro breakdowns. Values are marked as estimates."
+)
+async def analyze_food_image(
+    payload: FoodImageAnalyzeRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    user_id = current_user.get("id", "usr_001")
+    return food_vision_service.analyze_food_image(payload, user_id=user_id)
+
 # 2. POST /api/v1/food/log
 @router.post(
     "/log",
@@ -121,7 +160,9 @@ async def log_food_entry(
 
     # 2. Update daily nutrition & 3. Update daily summary
     from app.services.daily_summary_service import daily_summary_service
+    from app.services.gamification_service import gamification_service
     updated_summary = daily_summary_service.sync_daily_summary(user_id)
+    gamification_service.update_daily_streak(user_id)
 
     return {
         "success": True,

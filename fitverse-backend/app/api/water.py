@@ -28,7 +28,9 @@ async def log_water(
     current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     user_id = current_user.get("id", "usr_001")
+    from app.services.gamification_service import gamification_service
     result = daily_summary_service.record_water(user_id, payload.amount_ml)
+    gamification_service.update_daily_streak(user_id)
     return WaterLogResponseModel(
         today_total_ml=result["today_total_ml"],
         daily_target_ml=result["daily_target_ml"],

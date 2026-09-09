@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,15 +13,40 @@ import { Colors } from '../../theme/colors';
 import { GlassCard } from '../../components/common/GlassCard';
 import { HeaderBar } from '../../components/common/HeaderBar';
 import { useLeaderboard } from '../../services/mock/queries';
+import { GamificationService } from '../../services/api/gamificationService';
+import { LeaderboardUser } from '../../services/mock/types';
 
 interface LeaderboardScreenProps {
   navigation: any;
 }
 
 export const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ navigation }) => {
-  const { data: leaderboard } = useLeaderboard();
+  const { data: mockLeaderboard } = useLeaderboard();
   const [activeTab, setActiveTab] = useState<'national' | 'friends'>('national');
+  const [backendList, setBackendList] = useState<LeaderboardUser[] | null>(null);
 
+  useEffect(() => {
+    GamificationService.getLeaderboard('weekly', activeTab).then((res) => {
+      const entries = res?.rankings || res?.entries;
+      if (entries && entries.length > 0) {
+        const mapped: LeaderboardUser[] = entries.map((e: any) => ({
+          rank: e.rank,
+          previousRank: e.previous_rank ?? e.rank,
+          id: e.user_id,
+          name: e.name,
+          avatarUrl: e.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100',
+          xp: e.score ?? e.xp ?? 0,
+          level: Math.max(1, Math.floor((e.score ?? e.xp ?? 0) / 400)),
+          streak: 5,
+          badge: e.badge,
+          isCurrentUser: e.is_current_user ?? false,
+        }));
+        setBackendList(mapped);
+      }
+    });
+  }, [activeTab]);
+
+  const leaderboard = backendList || mockLeaderboard;
   const top3 = leaderboard?.slice(0, 3) || [];
   const restUsers = leaderboard?.slice(3) || [];
 

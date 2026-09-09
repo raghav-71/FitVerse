@@ -18,6 +18,7 @@ from app.schemas.workout import (
 )
 from app.services.health_score_service import health_score_service
 from app.services.daily_summary_service import daily_summary_service
+from app.services.injury_safety_service import injury_safety_service
 from app.database.supabase import get_supabase
 from app.core.logging import logger
 
@@ -132,6 +133,62 @@ async def get_exercise_catalog():
     return EXERCISE_CATALOG
 
 
+@router.get("/recommendations", summary="Get Personalized & Injury-Screened Workout Recommendations")
+async def get_workout_recommendations(current_user: Dict[str, Any] = Depends(get_current_user)):
+    """
+    Returns workout recommendations personalized to the user and vetted against
+    their active Injury Prevention Coach profile. Inappropriate movements are flagged
+    or substituted with low-impact alternatives.
+    """
+    user_id = current_user.get("id", "usr_001")
+    profile = injury_safety_service.get_user_profile(user_id)
+
+    caution_level = "low"
+    avoid_list = []
+    alternatives = []
+    disclaimer = injury_safety_service.config.disclaimer
+    body_part = None
+    pain_level = 0
+
+    if profile:
+        caution_level = profile.get("caution_level", "low")
+        body_part = profile.get("body_part")
+        pain_level = profile.get("pain_level", 0)
+        analysis = profile.get("analysis", {})
+        avoid_list = analysis.get("avoid_or_modify", [])
+        alternatives = analysis.get("lower_impact_alternatives", [])
+
+    # Annotate catalog items with clearance status
+    vetted_exercises = []
+    for ex in EXERCISE_CATALOG:
+        ex_copy = dict(ex)
+        ex_name = ex["name"].lower()
+
+        is_avoided = any(avoid.lower() in ex_name or ex_name in avoid.lower() for avoid in avoid_list)
+        if is_avoided:
+            if caution_level == "high":
+                ex_copy["clearance_status"] = "BLOCK"
+                ex_copy["clearance_reason"] = f"Contra-indicated for current {body_part} discomfort ({pain_level}/10)."
+            else:
+                ex_copy["clearance_status"] = "CAUTION"
+                ex_copy["clearance_reason"] = f"Exercise requires form modification or ROM limitation for {body_part} safety."
+        else:
+            ex_copy["clearance_status"] = "SAFE"
+            ex_copy["clearance_reason"] = "Optimal kinetic alignment cleared."
+
+        vetted_exercises.append(ex_copy)
+
+    return {
+        "user_id": user_id,
+        "caution_level": caution_level,
+        "monitored_body_part": body_part,
+        "pain_level": pain_level,
+        "recommended_exercises": vetted_exercises,
+        "lower_impact_alternatives": alternatives,
+        "medical_disclaimer": disclaimer
+    }
+
+
 @router.post("/telemetry", response_model=WorkoutTelemetryResponse, summary="Process Live Biomechanical Telemetry")
 async def process_workout_telemetry(payload: WorkoutTelemetryInput):
     """
@@ -146,28 +203,65 @@ async def process_workout_telemetry(payload: WorkoutTelemetryInput):
 
     knee = payload.knee_angle or 90.0
     back = payload.back_angle or 80.0
+    elbow = payload.elbow_angle or 90.0
+    ex_clean = payload.exercise_name.lower().replace(" ", "").replace("-", "").replace("_", "")
 
-    if "squat" in payload.exercise_name.lower():
-        if knee <= 90:
+    if "squat" in ex_clean:
+        if back < 60:
+            status_text = "WARNING"
+            cue = "Keep your back straight"
+            form_score = max(70.0, form_score - 15)
+        elif knee <= 90:
             depth_reached = True
             cue = "Good depth! Hips parallel to knees."
             form_score = 96.0
         elif knee > 115:
-            cue = "Go a little deeper to achieve full activation."
+            cue = "Go slightly lower"
+            form_score = 88.0
+        else:
+            cue = "Keep knees aligned"
+            form_score = 92.0
+
+    elif "pushup" in ex_clean:
+        if knee < 160 or back < 155:
+            status_text = "WARNING"
+            cue = "Keep your body straight"
+            form_score = 82.0
+        elif elbow <= 90:
+            depth_reached = True
+            cue = "Good form"
+            form_score = 95.0
+        elif elbow > 110:
+            cue = "Lower your chest"
+            form_score = 86.0
+        else:
+            cue = "Good form"
+
+    elif "lunge" in ex_clean:
+        if back < 70:
+            status_text = "WARNING"
+            cue = "Keep your torso upright"
+            form_score = 80.0
+        elif knee <= 95:
+            depth_reached = True
+            cue = "Good depth! Drive up through your front heel."
+            form_score = 94.0
+        else:
+            cue = "Lower your hips smoothly"
             form_score = 88.0
 
-        if back < 60:
+    elif "plank" in ex_clean:
+        if back < 160:
             status_text = "WARNING"
-            cue = "Keep chest upright — excessive forward lean detected!"
-            form_score = max(70.0, form_score - 15)
-
-    elif "pushup" in payload.exercise_name.lower():
-        if knee < 160:
-            status_text = "WARNING"
-            cue = "Keep your legs straight and hips level."
-            form_score = 82.0
+            cue = "Keep your body straight"
+            form_score = 78.0
         else:
-            cue = "Solid plank posture maintained."
+            cue = "Good form. Solid core hold."
+            form_score = 96.0
+
+    elif "jumpingjack" in ex_clean or "jack" in ex_clean:
+        cue = "Maintain steady tempo and full arm extension."
+        form_score = 94.0
 
     if payload.rep_phase == "bottom" and depth_reached:
         rep_counted = True
@@ -380,8 +474,24 @@ async def complete_workout_session(
 
     # 2. Save exercise logs
     saved_exercises = []
-    if payload.exercises:
-        for ex in payload.exercises:
+    exercise_items = list(payload.exercises or [])
+    if not exercise_items and (payload.reps or payload.total_reps):
+        from app.schemas.workout import ExerciseLogCreate
+        reps_val = payload.reps or payload.total_reps or 12
+        exercise_items.append(
+            ExerciseLogCreate(
+                workout_session_id=session_id,
+                exercise_name=payload.exercise or payload.workout_name,
+                sets=1,
+                reps=reps_val,
+                weight_kg=0.0,
+                duration_seconds=int(payload.duration_minutes * 60),
+                form_score=payload.form_score or 92.0,
+            )
+        )
+
+    if exercise_items:
+        for ex in exercise_items:
             ex_id = f"ex_{int(datetime.now().timestamp() * 1000)}"
             ex_record = {
                 "id": ex_id,
@@ -457,43 +567,31 @@ async def complete_workout_session(
         except Exception as e:
             logger.error(f"Error upserting workout to daily_summaries: {e}")
 
-    # 5 & 6. Update streak, XP and rewards in user_rewards
-    user_rewards = DEV_USER_REWARDS.get(user_id, {
-        "xp": 1450,
-        "coins": 320,
-        "level": 2,
-        "current_streak": 7,
-        "last_workout_date": None
-    })
+    # 5 & 6. Update streak, XP and rewards via central gamification_service
+    from app.services.gamification_service import gamification_service
+    from app.schemas.gamification import GamificationEventXPInput
 
     xp_earned = int(100 + (payload.duration_minutes * 2) + ((payload.form_score or 90) * 0.2))
-    coins_earned = int(10 + (payload.duration_minutes * 0.5))
-
+    coins_earned = int(25 + (payload.duration_minutes * 0.5))
+    current_level = 1
+    current_streak = 1
     streak_incremented = False
-    last_date = user_rewards.get("last_workout_date")
-    if last_date != today_str:
-        user_rewards["current_streak"] = user_rewards.get("current_streak", 0) + 1
-        user_rewards["last_workout_date"] = today_str
+
+    try:
+        event_res = gamification_service.award_event_xp(
+            user_id,
+            GamificationEventXPInput(event_type="workout_completed", reference_id=session_id)
+        )
+        xp_earned = event_res.xp_awarded
+        coins_earned = event_res.coins_awarded
+        current_level = event_res.new_level
+        current_streak = event_res.streak
         streak_incremented = True
-
-    user_rewards["xp"] = user_rewards.get("xp", 0) + xp_earned
-    user_rewards["coins"] = user_rewards.get("coins", 0) + coins_earned
-    user_rewards["level"] = 1 + (user_rewards["xp"] // 1000)
-    DEV_USER_REWARDS[user_id] = user_rewards
-
-    if supabase and user_id != "usr_001":
-        try:
-            reward_update = {
-                "user_id": user_id,
-                "xp": user_rewards["xp"],
-                "coins": user_rewards["coins"],
-                "level": user_rewards["level"],
-                "current_streak": user_rewards["current_streak"],
-                "updated_at": now.isoformat(),
-            }
-            supabase.table("user_rewards").upsert(reward_update, on_conflict="user_id").execute()
-        except Exception as e:
-            logger.error(f"Error persisting user_rewards in Supabase: {e}")
+    except Exception as e:
+        logger.info(f"Gamification award note: {e}")
+        profile = gamification_service.get_profile(user_id)
+        current_level = profile.level
+        current_streak = profile.current_streak
 
     # 7. Make data available for weekly AI analysis
     # Data is saved in workout_sessions and daily_summaries, immediately accessible to /ai/weekly-report
@@ -513,8 +611,8 @@ async def complete_workout_session(
         rewards_earned=WorkoutRewardsEarned(
             xp=xp_earned,
             coins=coins_earned,
-            level=user_rewards["level"],
-            current_streak=user_rewards["current_streak"],
+            level=current_level,
+            current_streak=current_streak,
             streak_incremented=streak_incremented,
         )
     )

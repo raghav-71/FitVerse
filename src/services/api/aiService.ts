@@ -1,4 +1,4 @@
-import { API_CONFIG } from './config';
+import { apiClient } from './client';
 
 export interface InjuryScreenResponse {
   status: 'SAFE' | 'CAUTION' | 'BLOCK';
@@ -61,22 +61,12 @@ export const AiService = {
     painLevel: string = 'mild',
     painType: string = 'joint_strain'
   ): Promise<InjuryScreenResponse | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/ai/injury-screen`;
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          body_parts: bodyParts,
-          pain_level: painLevel,
-          pain_type: painType,
-        }),
+      return await apiClient.post<InjuryScreenResponse>('/ai/injury-screen', {
+        body_parts: bodyParts,
+        pain_level: painLevel,
+        pain_type: painType,
       });
-
-      if (response.ok) {
-        return await response.json();
-      }
     } catch (err) {
       console.warn('AI Injury screening backend unavailable, relying on on-device rules:', err);
     }
@@ -88,27 +78,17 @@ export const AiService = {
    * POST /api/v1/ai/diet-plan
    */
   async generateDietPlan(params: DietPlanParams): Promise<DietPlanResponse | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/ai/diet-plan`;
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          age: params.age,
-          gender: params.gender || 'male',
-          height_cm: params.height_cm,
-          weight_kg: params.weight_kg,
-          goal: params.goal || 'fat_loss',
-          activity_level: params.activity_level || 'moderate',
-          diet_preference: params.diet_preference || 'vegetarian',
-          target_weight: params.target_weight,
-        }),
+      return await apiClient.post<DietPlanResponse>('/ai/diet-plan', {
+        age: params.age,
+        gender: params.gender || 'male',
+        height_cm: params.height_cm,
+        weight_kg: params.weight_kg,
+        goal: params.goal || 'fat_loss',
+        activity_level: params.activity_level || 'moderate',
+        diet_preference: params.diet_preference || 'vegetarian',
+        target_weight: params.target_weight,
       });
-
-      if (response.ok) {
-        return await response.json();
-      }
     } catch (err) {
       console.warn('AI Diet Plan backend unavailable, using offline estimate:', err);
     }
@@ -178,13 +158,8 @@ export const AiService = {
    */
   async getDailyAnalysis(dateStr?: string): Promise<DailyAnalysisResponse | null> {
     const query = dateStr ? `?date=${encodeURIComponent(dateStr)}` : '';
-    const url = `${API_CONFIG.getApiV1Url()}/ai/daily-analysis${query}`;
-
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get<DailyAnalysisResponse>(`/ai/daily-analysis${query}`);
     } catch (err) {
       console.warn('AI Daily analysis backend unavailable, using offline fallback analysis:', err);
     }
@@ -222,13 +197,8 @@ export const AiService = {
    * GET /api/v1/ai/weekly-report
    */
   async getWeeklyReport(weekOffset: number = 0): Promise<WeeklyReportData | null> {
-    const url = `${API_CONFIG.getApiV1Url()}/ai/weekly-report?week_offset=${weekOffset}`;
-
     try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return await response.json();
-      }
+      return await apiClient.get<WeeklyReportData>(`/ai/weekly-report?week_offset=${weekOffset}`);
     } catch (err) {
       console.warn('AI Weekly report backend unavailable, using offline baseline data:', err);
     }
@@ -310,6 +280,7 @@ export const AiService = {
 
 export interface DailyAnalysisResponse {
   daily_score: number;
+  headline?: string;
   category_scores: {
     nutrition: number;
     hydration: number;
@@ -328,6 +299,7 @@ export interface DailyAnalysisResponse {
 }
 
 export interface WeeklyReportData {
+  has_data?: boolean;
   week: {
     start: string;
     end: string;

@@ -14,6 +14,7 @@ export interface LoggedMeal {
   protein: number;
   carbs: number;
   fat: number;
+  fiber?: number;
   loggedAt: string;
 }
 
@@ -23,6 +24,7 @@ export interface DietState {
   proteinTarget: number;
   carbsTarget: number;
   fatTarget: number;
+  fiberTarget: number;
   waterTarget: number;
   bmr: number;
   tdee: number;
@@ -35,7 +37,7 @@ export interface DietState {
 
   addMeal: (meal: Omit<LoggedMeal, 'id' | 'loggedAt'>) => void;
   removeMeal: (id: string) => void;
-  getTotals: () => { calories: number; protein: number; carbs: number; fat: number };
+  getTotals: () => { calories: number; protein: number; carbs: number; fat: number; fiber: number };
   resetDay: () => void;
   syncTodayWithBackend: () => Promise<void>;
   fetchDailyAnalysis: () => Promise<DailyAnalysisResponse | null>;
@@ -53,6 +55,7 @@ const INITIAL_MEALS: LoggedMeal[] = [
     protein: 38,
     carbs: 56,
     fat: 12,
+    fiber: 8,
     loggedAt: '8:15 AM',
   },
   {
@@ -63,6 +66,7 @@ const INITIAL_MEALS: LoggedMeal[] = [
     protein: 44,
     carbs: 72,
     fat: 18,
+    fiber: 10,
     loggedAt: '1:30 PM',
   },
   {
@@ -73,6 +77,7 @@ const INITIAL_MEALS: LoggedMeal[] = [
     protein: 20,
     carbs: 26,
     fat: 4,
+    fiber: 3,
     loggedAt: '5:00 PM',
   },
 ];
@@ -83,6 +88,7 @@ export const useDietStore = create<DietState>((set, get) => ({
   proteinTarget: 140,
   carbsTarget: 250,
   fatTarget: 70,
+  fiberTarget: 35,
   waterTarget: 8,
   bmr: 1800,
   tdee: 2700,
@@ -102,6 +108,7 @@ export const useDietStore = create<DietState>((set, get) => ({
       proteinTarget: targets.protein_g,
       carbsTarget: targets.carbs_g,
       fatTarget: targets.fat_g,
+      fiberTarget: 35,
       waterTarget: waterGlasses,
       bmr: plan.bmr,
       tdee: plan.tdee,
@@ -194,8 +201,9 @@ export const useDietStore = create<DietState>((set, get) => ({
         protein: acc.protein + m.protein,
         carbs: acc.carbs + m.carbs,
         fat: acc.fat + m.fat,
+        fiber: acc.fiber + (m.fiber || 0),
       }),
-      { calories: 0, protein: 0, carbs: 0, fat: 0 }
+      { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 }
     );
   },
 
@@ -237,18 +245,23 @@ export const useDietStore = create<DietState>((set, get) => ({
         AiService.getWeeklyReport(0),
       ]);
 
-      if (foodData && foodData.meals && foodData.meals.length > 0) {
-        const formatted: LoggedMeal[] = foodData.meals.map((m: any) => ({
-          id: m.id,
-          mealType: m.meal_type || 'Breakfast',
-          name: m.food_name || m.name,
-          calories: m.calories || 0,
-          protein: m.protein || 0,
-          carbs: m.carbs || 0,
-          fat: m.fat || 0,
-          loggedAt: m.logged_at || 'Just now',
-        }));
-        set({ meals: formatted });
+      if (foodData && Array.isArray(foodData.meals)) {
+        if (foodData.meals.length > 0) {
+          const formatted: LoggedMeal[] = foodData.meals.map((m: any) => ({
+            id: m.id,
+            mealType: m.meal_type || 'Breakfast',
+            name: m.food_name || m.name,
+            calories: m.calories || 0,
+            protein: m.protein || 0,
+            carbs: m.carbs || 0,
+            fat: m.fat || 0,
+            fiber: m.fiber || 0,
+            loggedAt: m.logged_at || 'Just now',
+          }));
+          set({ meals: formatted });
+        } else {
+          set({ meals: [] });
+        }
       }
 
       if (summary) {

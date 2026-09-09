@@ -12,6 +12,8 @@ class UserProfileResponse(UserBase):
     gender: Optional[str] = None
     height_cm: Optional[float] = 178.0
     weight_kg: Optional[float] = 75.8
+    target_weight_kg: Optional[float] = 72.0
+    diet_preference: Optional[str] = "Vegetarian"
     selected_goal: Optional[str] = "Build Muscle"
     activity_level: Optional[str] = "Moderately Active"
     experience_level: Optional[str] = "Intermediate"
@@ -31,6 +33,8 @@ class UserProfileUpdate(BaseModel):
     gender: Optional[str] = None
     height_cm: Optional[float] = None
     weight_kg: Optional[float] = None
+    target_weight_kg: Optional[float] = None
+    diet_preference: Optional[str] = None
     selected_goal: Optional[str] = None
     activity_level: Optional[str] = None
     experience_level: Optional[str] = None

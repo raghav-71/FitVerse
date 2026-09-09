@@ -29,6 +29,11 @@ import {
   Dumbbell,
   Droplets,
   Edit3,
+  Trash2,
+  Camera,
+  Sliders,
+  Zap,
+  Minus,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 
@@ -37,7 +42,7 @@ import { Colors } from '../../theme/colors';
 import { theme } from '../../theme';
 import { useGamificationStore } from '../../stores/gamificationStore';
 import { useDailyActivityStore } from '../../stores/dailyActivityStore';
-import { useDietStore } from '../../stores/dietStore';
+import { useDietStore, MealType } from '../../stores/dietStore';
 
 import { SegmentedTabControl } from '../challenges/components/SegmentedTabControl';
 import {
@@ -47,7 +52,8 @@ import {
   WeightTrendChart,
 } from './components/ProgressSvgCharts';
 import { MacroRing } from './components/MacroRing';
-import { LogFoodModal } from './components/LogFoodModal';
+import { LogFoodModal, LogFoodTab } from './components/LogFoodModal';
+import { DietPlanModal } from '../home/components/DietPlanModal';
 import { TransformationChart } from './components/TransformationChart';
 import { StressScaleBar } from './components/StressScaleBar';
 import { SixDimensionsProgress } from './components/SixDimensionsProgress';
@@ -72,24 +78,46 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ navigation }) =>
   // Section 4: Week index (0 = This Week, 1 = Last Week, etc.)
   const [weekOffset, setWeekOffset] = useState(0);
 
+  // Diet Logging & Plan Modals
+  const [logFoodTab, setLogFoodTab] = useState<LogFoodTab>('text');
+  const [selectedMealType, setSelectedMealType] = useState<MealType>('Breakfast');
+  const [dietPlanModalVisible, setDietPlanModalVisible] = useState(false);
+
   // Language Translation & Theme
   const { t, num } = useTranslation();
   const { colors, isDark } = useTheme();
 
   // Stores
   const { xp, streak } = useGamificationStore();
-  const { currentWeight, targetWeight, waterGlasses, fitScoreData, syncWithBackend: syncDailyActivity } = useDailyActivityStore();
+  const {
+    currentWeight,
+    targetWeight,
+    waterGlasses,
+    addWaterGlass,
+    setWaterGlasses,
+    fitScoreData,
+    exerciseLogged,
+    loggedActivities,
+    syncWithBackend: syncDailyActivity,
+  } = useDailyActivityStore();
+
   const {
     meals,
     calorieTarget,
     proteinTarget,
+    carbsTarget,
+    fatTarget,
+    fiberTarget,
     waterTarget,
+    bmr,
+    tdee,
     planReasoning,
     dailyAnalysis,
     weeklyReport,
     getTotals,
     removeMeal,
     syncTodayWithBackend,
+    fetchDailyAnalysis,
     fetchWeeklyReport,
   } = useDietStore();
 
@@ -132,6 +160,34 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ navigation }) =>
   };
 
   const totals = getTotals();
+
+  const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const todayDayIndex = (new Date().getDay() + 6) % 7;
+  const hasAnyActivity = exerciseLogged || waterGlasses > 0 || meals.length > 0;
+  const daysTracked = (weeklyReport && weeklyReport.workout.workout_days > 0)
+    ? weeklyReport.workout.workout_days
+    : hasAnyActivity ? 1 : 0;
+
+  const realBreakdown = daysOfWeek.map((dayName, idx) => {
+    if (idx === todayDayIndex) {
+      return {
+        day: dayName,
+        done: exerciseLogged || waterGlasses >= 4,
+        water: waterGlasses,
+        kcal: totals.calories,
+        note: loggedActivities.length > 0 ? loggedActivities.join(' • ') : exerciseLogged ? 'AI Workout Logged' : meals.length > 0 ? 'Nutrition Logged' : 'Today',
+      };
+    }
+    const isPastDay = idx < todayDayIndex;
+    const hasPastWorkout = weeklyReport && isPastDay && idx < (weeklyReport.workout.workout_days || 0);
+    return {
+      day: dayName,
+      done: !!hasPastWorkout,
+      water: hasPastWorkout ? Math.round(weeklyReport.hydration.daily_average_ml / 250) : 0,
+      kcal: hasPastWorkout ? weeklyReport.nutrition.average_calories : 0,
+      note: hasPastWorkout ? 'Session Complete' : isPastDay ? 'Rest / Active Recovery' : 'Upcoming',
+    };
+  });
 
   const weekLabels = ['This Week (Current)', 'Last Week (Aug 25 - 31)', '2 Weeks Ago (Aug 18 - 24)'];
 
@@ -263,148 +319,453 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ navigation }) =>
           {/* =================================================================== */}
           {/* SECTION 2: DIET & NUTRITION (NEW MODULE)                            */}
           {/* =================================================================== */}
+          {/* =================================================================== */}
+          {/* SECTION 2: DIET & NUTRITION                                         */}
+          {/* =================================================================== */}
           {activeTab === 'diet' && (
             <View style={styles.sectionContainer}>
-              {/* The 6 Dimensions Progress Poll (Screenshot) */}
-              <SixDimensionsProgress
-                categoryScores={dailyAnalysis?.category_scores}
-                dailyScore={dailyAnalysis?.daily_score}
-              />
-
-              {/* Your Journey Transformation Stepper Card (Screenshot) */}
-              <YourJourneyCard
-                totalWorkoutMinutes={250}
-                dailyScore={dailyAnalysis?.daily_score}
-              />
-
-              {/* Log Food Action Bar */}
-              <View style={styles.logFoodBar}>
-                <View>
-                  <Text style={[styles.moduleSectionTitle, { color: colors.textPrimary }]}>{t('dailyNutrition') || 'Daily Nutrition'}</Text>
-                  <Text style={[styles.moduleSectionSub, { color: colors.textSecondary }]}>Targeted macros based on your hypertrophy goal</Text>
+              {/* Top Header & 8. Food Logging Action Buttons (Text, Manual, Photo) */}
+              <View style={styles.dietTopHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.moduleSectionTitle, { color: colors.textPrimary }]}>
+                    {t('dailyNutrition') || 'Diet & Nutrition'}
+                  </Text>
+                  <Text style={[styles.moduleSectionSub, { color: colors.textSecondary }]}>
+                    Personalized targets & AI nutrient tracking
+                  </Text>
                 </View>
-
-                <GradientButton
-                  title={t('logFood') || 'Log Food'}
-                  onPress={() => setLogModalVisible(true)}
-                  icon={<Plus size={16} color="#FFFFFF" />}
-                  size="sm"
-                />
               </View>
 
-              {/* Today's Nutrition Summary Card with 3 Macro Rings */}
-              <GlassCard variant="glow" style={styles.nutritionSummaryCard} padding={16}>
-                <View style={styles.ringsRow}>
-                  <MacroRing
-                    current={totals.calories}
-                    target={calorieTarget}
-                    label="Calories"
-                    unit="kcal"
-                    color={colors.primary}
-                  />
-                  <MacroRing
-                    current={totals.protein}
-                    target={proteinTarget}
-                    label="Protein"
-                    unit="g"
-                    color={colors.primaryViolet}
-                  />
-                  <MacroRing
-                    current={waterGlasses}
-                    target={waterTarget}
-                    label="Water"
-                    unit="gls"
-                    color={colors.accentSky}
-                  />
+              {/* 8. Food Logging 3-Action Bar */}
+              <View style={styles.quickLogButtonsRow}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setLogFoodTab('text');
+                    setLogModalVisible(true);
+                  }}
+                  style={[styles.quickLogBtn, { backgroundColor: isDark ? 'rgba(79, 124, 255, 0.15)' : 'rgba(79, 124, 255, 0.1)', borderColor: colors.primary }]}
+                >
+                  <Sparkles size={14} color={colors.primary} />
+                  <Text style={[styles.quickLogBtnText, { color: colors.primary }]}>Text Input</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setLogFoodTab('manual');
+                    setLogModalVisible(true);
+                  }}
+                  style={[styles.quickLogBtn, { backgroundColor: isDark ? 'rgba(139, 92, 246, 0.15)' : 'rgba(139, 92, 246, 0.1)', borderColor: colors.primaryViolet }]}
+                >
+                  <Sliders size={14} color={colors.primaryViolet} />
+                  <Text style={[styles.quickLogBtnText, { color: colors.primaryViolet }]}>Manual Input</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setLogFoodTab('photo');
+                    setLogModalVisible(true);
+                  }}
+                  style={[styles.quickLogBtn, { backgroundColor: isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderColor: colors.neonGreen }]}
+                >
+                  <Camera size={14} color={colors.neonGreen} />
+                  <Text style={[styles.quickLogBtnText, { color: colors.neonGreen }]}>Photo Upload</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* 1. Today's Calories Hero Card */}
+              <GlassCard variant="glow" style={styles.calorieHeroCard} padding={16}>
+                <View style={styles.calorieHeroHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.metricHeaderLabel, { color: colors.textSecondary }]}>TODAY'S CALORIES</Text>
+                    <View style={styles.calorieNumberRow}>
+                      <Text style={[styles.calorieBigNumber, { color: colors.textPrimary }]}>
+                        {num(totals.calories.toLocaleString())}
+                      </Text>
+                      <Text style={[styles.calorieTargetDivider, { color: colors.textMuted }]}>/</Text>
+                      <Text style={[styles.calorieTargetNumber, { color: colors.textSecondary }]}>
+                        {num(calorieTarget.toLocaleString())} kcal
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.calorieBadgeWrap}>
+                    <Badge
+                      label={
+                        totals.calories > calorieTarget
+                          ? `+${num(totals.calories - calorieTarget)} over`
+                          : `${num(Math.max(0, calorieTarget - totals.calories))} kcal left`
+                      }
+                      variant={totals.calories > calorieTarget ? 'warning' : 'primary'}
+                      size="sm"
+                    />
+                  </View>
                 </View>
 
-                {/* AI Insight Line */}
-                <View style={styles.aiInsightRow}>
-                  <Sparkles size={14} color={colors.neonGreen} />
-                  <Text style={[styles.aiInsightText, { color: colors.textPrimary }]}>
-                    {dailyAnalysis?.nutrition_analysis || planReasoning || `You're on track for your hypertrophy goal — consider adding ~${Math.max(0, proteinTarget - totals.protein)}g more protein at dinner.`}
-                  </Text>
+                {/* Calorie Progress Bar */}
+                <View style={[styles.calorieProgressBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }]}>
+                  <View
+                    style={[
+                      styles.calorieProgressBarFill,
+                      {
+                        width: `${Math.min(100, Math.round((totals.calories / (calorieTarget || 1)) * 100))}%`,
+                        backgroundColor: totals.calories > calorieTarget ? Colors.warning : colors.primary,
+                      },
+                    ]}
+                  />
                 </View>
               </GlassCard>
 
-              {/* Today's Logged Meals List */}
+              {/* 2, 3, 4, 5: Macronutrients Grid (Protein, Carbs, Fat, Fiber) */}
+              <View style={styles.macroCardsGrid}>
+                {/* 2. Protein */}
+                <GlassCard style={styles.macroCardItem} padding={12}>
+                  <View style={styles.macroCardHeader}>
+                    <Text style={[styles.macroCardTitle, { color: colors.textSecondary }]}>PROTEIN</Text>
+                    <Text style={[styles.macroCardPct, { color: colors.primaryViolet }]}>
+                      {Math.min(100, Math.round((totals.protein / (proteinTarget || 1)) * 100))}%
+                    </Text>
+                  </View>
+                  <View style={styles.macroValueRow}>
+                    <Text style={[styles.macroValueBig, { color: colors.textPrimary }]}>{num(totals.protein)}</Text>
+                    <Text style={[styles.macroValueTarget, { color: colors.textMuted }]}>/ {num(proteinTarget)}g</Text>
+                  </View>
+                  <View style={[styles.macroBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' }]}>
+                    <View
+                      style={[
+                        styles.macroBarFill,
+                        {
+                          width: `${Math.min(100, Math.round((totals.protein / (proteinTarget || 1)) * 100))}%`,
+                          backgroundColor: colors.primaryViolet,
+                        },
+                      ]}
+                    />
+                  </View>
+                </GlassCard>
+
+                {/* 3. Carbs */}
+                <GlassCard style={styles.macroCardItem} padding={12}>
+                  <View style={styles.macroCardHeader}>
+                    <Text style={[styles.macroCardTitle, { color: colors.textSecondary }]}>CARBS</Text>
+                    <Text style={[styles.macroCardPct, { color: colors.accentSky }]}>
+                      {Math.min(100, Math.round((totals.carbs / (carbsTarget || 1)) * 100))}%
+                    </Text>
+                  </View>
+                  <View style={styles.macroValueRow}>
+                    <Text style={[styles.macroValueBig, { color: colors.textPrimary }]}>{num(totals.carbs)}</Text>
+                    <Text style={[styles.macroValueTarget, { color: colors.textMuted }]}>/ {num(carbsTarget)}g</Text>
+                  </View>
+                  <View style={[styles.macroBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' }]}>
+                    <View
+                      style={[
+                        styles.macroBarFill,
+                        {
+                          width: `${Math.min(100, Math.round((totals.carbs / (carbsTarget || 1)) * 100))}%`,
+                          backgroundColor: colors.accentSky,
+                        },
+                      ]}
+                    />
+                  </View>
+                </GlassCard>
+
+                {/* 4. Fat */}
+                <GlassCard style={styles.macroCardItem} padding={12}>
+                  <View style={styles.macroCardHeader}>
+                    <Text style={[styles.macroCardTitle, { color: colors.textSecondary }]}>FAT</Text>
+                    <Text style={[styles.macroCardPct, { color: '#EAB308' }]}>
+                      {Math.min(100, Math.round((totals.fat / (fatTarget || 1)) * 100))}%
+                    </Text>
+                  </View>
+                  <View style={styles.macroValueRow}>
+                    <Text style={[styles.macroValueBig, { color: colors.textPrimary }]}>{num(totals.fat)}</Text>
+                    <Text style={[styles.macroValueTarget, { color: colors.textMuted }]}>/ {num(fatTarget)}g</Text>
+                  </View>
+                  <View style={[styles.macroBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' }]}>
+                    <View
+                      style={[
+                        styles.macroBarFill,
+                        {
+                          width: `${Math.min(100, Math.round((totals.fat / (fatTarget || 1)) * 100))}%`,
+                          backgroundColor: '#EAB308',
+                        },
+                      ]}
+                    />
+                  </View>
+                </GlassCard>
+
+                {/* 5. Fiber */}
+                <GlassCard style={styles.macroCardItem} padding={12}>
+                  <View style={styles.macroCardHeader}>
+                    <Text style={[styles.macroCardTitle, { color: colors.textSecondary }]}>FIBER</Text>
+                    <Text style={[styles.macroCardPct, { color: colors.neonGreen }]}>
+                      {Math.min(100, Math.round(((totals.fiber || 0) / (fiberTarget || 1)) * 100))}%
+                    </Text>
+                  </View>
+                  <View style={styles.macroValueRow}>
+                    <Text style={[styles.macroValueBig, { color: colors.textPrimary }]}>{num(totals.fiber || 0)}</Text>
+                    <Text style={[styles.macroValueTarget, { color: colors.textMuted }]}>/ {num(fiberTarget)}g</Text>
+                  </View>
+                  <View style={[styles.macroBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)' }]}>
+                    <View
+                      style={[
+                        styles.macroBarFill,
+                        {
+                          width: `${Math.min(100, Math.round(((totals.fiber || 0) / (fiberTarget || 1)) * 100))}%`,
+                          backgroundColor: colors.neonGreen,
+                        },
+                      ]}
+                    />
+                  </View>
+                </GlassCard>
+              </View>
+
+              {/* 6. Water Card with interactive inline quick controls */}
+              <GlassCard style={styles.waterCard} padding={14}>
+                <View style={styles.waterCardHeader}>
+                  <View style={styles.waterLeft}>
+                    <Droplets size={20} color={colors.accentSky} />
+                    <View>
+                      <Text style={[styles.waterTitle, { color: colors.textPrimary }]}>WATER / HYDRATION</Text>
+                      <Text style={[styles.waterSubtitle, { color: colors.textSecondary }]}>
+                        {num((waterGlasses * 0.25).toFixed(1))}L / {num((waterTarget * 0.25).toFixed(1))}L ({num(waterGlasses)} / {num(waterTarget)} glasses)
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.waterActions}>
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        try {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        } catch {}
+                        setWaterGlasses(Math.max(0, waterGlasses - 1));
+                      }}
+                      style={[styles.waterIconBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)' }]}
+                    >
+                      <Minus size={14} color={colors.textSecondary} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        try {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        } catch {}
+                        addWaterGlass();
+                      }}
+                      style={[styles.waterIconBtn, { backgroundColor: colors.accentSky }]}
+                    >
+                      <Plus size={14} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={[styles.calorieProgressBarTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', marginTop: 10 }]}>
+                  <View
+                    style={[
+                      styles.calorieProgressBarFill,
+                      {
+                        width: `${Math.min(100, Math.round((waterGlasses / (waterTarget || 1)) * 100))}%`,
+                        backgroundColor: colors.accentSky,
+                      },
+                    ]}
+                  />
+                </View>
+              </GlassCard>
+
+              {/* 7. Today's Meals (Breakfast, Lunch, Snacks, Dinner) */}
               <View style={styles.mealsHeaderRow}>
-                <Text style={[styles.sectionHeadingSmall, { color: colors.textSecondary }]}>TODAY'S LOGGED MEALS</Text>
-                <Text style={[styles.mealsCount, { color: colors.textMuted }]}>{num(meals.length)} items</Text>
+                <Text style={[styles.sectionHeadingSmall, { color: colors.textSecondary }]}>TODAY'S MEALS</Text>
+                <Text style={[styles.mealsCount, { color: colors.textMuted }]}>{num(meals.length)} items logged</Text>
               </View>
 
-              <View style={styles.mealsList}>
-                {meals.map((meal) => (
-                  <GlassCard key={meal.id} style={styles.mealCard} padding={12}>
-                    <View style={styles.mealLeft}>
-                      <View style={styles.mealTypeBadgeWrap}>
-                        <Badge
-                          label={meal.mealType}
-                          variant={
-                            meal.mealType === 'Breakfast'
-                              ? 'warning'
-                              : meal.mealType === 'Lunch'
-                              ? 'primary'
-                              : meal.mealType === 'Dinner'
-                              ? 'gold'
-                              : 'neutral'
-                          }
-                          size="sm"
-                        />
-                        <Text style={[styles.mealTime, { color: colors.textMuted }]}>{meal.loggedAt}</Text>
+              {/* Render 4 Meal Categories */}
+              {(
+                [
+                  { type: 'Breakfast', icon: '🌅', label: 'Breakfast' },
+                  { type: 'Lunch', icon: '☀️', label: 'Lunch' },
+                  { type: 'Snack', icon: '🍎', label: 'Snacks' },
+                  { type: 'Dinner', icon: '🌙', label: 'Dinner' },
+                ] as const
+              ).map(({ type, icon, label }) => {
+                const categoryMeals = meals.filter((m) => m.mealType === type);
+                const catCalories = categoryMeals.reduce((acc, m) => acc + m.calories, 0);
+                const catProtein = categoryMeals.reduce((acc, m) => acc + m.protein, 0);
+
+                return (
+                  <GlassCard key={type} style={styles.mealSectionCard} padding={12}>
+                    <View style={styles.mealSectionTop}>
+                      <View style={styles.mealSectionTitleRow}>
+                        <Text style={styles.mealSectionEmoji}>{icon}</Text>
+                        <Text style={[styles.mealSectionLabel, { color: colors.textPrimary }]}>{label}</Text>
+                        <Text style={[styles.mealSectionSubtotal, { color: colors.textMuted }]}>
+                          • {num(catCalories)} kcal ({num(catProtein)}g P)
+                        </Text>
                       </View>
-                      <Text style={[styles.mealName, { color: colors.textPrimary }]}>{meal.name}</Text>
+
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        onPress={() => {
+                          setSelectedMealType(type as MealType);
+                          setLogFoodTab('text');
+                          setLogModalVisible(true);
+                        }}
+                        style={[styles.addMealPill, { backgroundColor: isDark ? 'rgba(79, 124, 255, 0.15)' : 'rgba(79, 124, 255, 0.08)' }]}
+                      >
+                        <Plus size={12} color={colors.primary} />
+                        <Text style={[styles.addMealPillText, { color: colors.primary }]}>Add</Text>
+                      </TouchableOpacity>
                     </View>
 
-                    <View style={styles.mealRight}>
-                      <Text style={[styles.mealCalories, { color: colors.textPrimary }]}>{num(meal.calories)} kcal</Text>
-                      <Text style={[styles.mealProtein, { color: colors.textSecondary }]}>{num(meal.protein)}g protein</Text>
-                    </View>
+                    {categoryMeals.length > 0 ? (
+                      <View style={styles.mealItemsCol}>
+                        {categoryMeals.map((meal) => (
+                          <View key={meal.id} style={[styles.mealRowItem, { borderBottomColor: colors.border }]}>
+                            <View style={styles.mealLeft}>
+                              <Text style={[styles.mealName, { color: colors.textPrimary }]}>{meal.name}</Text>
+                              <Text style={[styles.mealTime, { color: colors.textMuted }]}>
+                                {meal.loggedAt} • {meal.carbs}g C • {meal.fat}g F{meal.fiber ? ` • ${meal.fiber}g Fib` : ''}
+                              </Text>
+                            </View>
+
+                            <View style={styles.mealRowRight}>
+                              <View style={{ alignItems: 'flex-end' }}>
+                                <Text style={[styles.mealCalories, { color: colors.textPrimary }]}>
+                                  {num(meal.calories)} kcal
+                                </Text>
+                                <Text style={[styles.mealProtein, { color: colors.primaryViolet }]}>
+                                  {num(meal.protein)}g P
+                                </Text>
+                              </View>
+
+                              <TouchableOpacity
+                                activeOpacity={0.7}
+                                onPress={() => removeMeal(meal.id)}
+                                style={styles.deleteMealBtn}
+                              >
+                                <Trash2 size={13} color={colors.textMuted} />
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+                    ) : (
+                      <View style={styles.emptyMealBox}>
+                        <Text style={[styles.emptyMealText, { color: colors.textMuted }]}>
+                          No items logged for {label.toLowerCase()} yet.
+                        </Text>
+                      </View>
+                    )}
                   </GlassCard>
-                ))}
-              </View>
+                );
+              })}
 
-              {/* Personalized Diet Plan Summary Card */}
+              {/* 9. AI Diet Analysis */}
+              <GlassCard style={styles.aiAnalysisCard} padding={16}>
+                <View style={styles.aiAnalysisHeader}>
+                  <View style={styles.aiAnalysisHeaderLeft}>
+                    <Sparkles size={18} color={colors.neonGreen} />
+                    <Text style={[styles.aiAnalysisTitle, { color: colors.textPrimary }]}>
+                      AI Diet & Nutrition Analysis
+                    </Text>
+                  </View>
+                  <Badge
+                    label={`${dailyAnalysis?.daily_score ? num(dailyAnalysis.daily_score) : 88}/100 SCORE`}
+                    variant="success"
+                    size="sm"
+                  />
+                </View>
+
+                <Text style={[styles.aiAnalysisBody, { color: colors.textSecondary }]}>
+                  {dailyAnalysis?.nutrition_analysis ||
+                    planReasoning ||
+                    `Your nutritional distribution supports your muscle hypertrophy target. Protein intake is ${Math.round((totals.protein / (proteinTarget || 1)) * 100)}% to target. Consider adding fibrous greens at dinner.`}
+                </Text>
+
+                {/* Key Highlights / Positives */}
+                <View style={styles.analysisBulletsWrap}>
+                  <Text style={[styles.bulletSectionLabel, { color: colors.neonGreen }]}>KEY STRENGTHS</Text>
+                  <View style={styles.bulletRow}>
+                    <CheckCircle2 size={13} color={colors.neonGreen} />
+                    <Text style={[styles.bulletText, { color: colors.textSecondary }]}>
+                      {totals.protein >= proteinTarget * 0.7
+                        ? `Strong protein pacing (${totals.protein}g) supports muscle protein synthesis.`
+                        : 'Balanced morning meal timing supports glycogen availability.'}
+                    </Text>
+                  </View>
+                  <View style={styles.bulletRow}>
+                    <CheckCircle2 size={13} color={colors.neonGreen} />
+                    <Text style={[styles.bulletText, { color: colors.textSecondary }]}>
+                      Hydration level ({waterGlasses * 0.25}L) maintains cellular volume and reduces fatigue.
+                    </Text>
+                  </View>
+
+                  <Text style={[styles.bulletSectionLabel, { color: Colors.warning, marginTop: 6 }]}>
+                    RECOMMENDATIONS
+                  </Text>
+                  {dailyAnalysis?.tomorrow_recommendations && dailyAnalysis.tomorrow_recommendations.length > 0 ? (
+                    dailyAnalysis.tomorrow_recommendations.slice(0, 2).map((rec, idx) => (
+                      <View key={idx} style={styles.bulletRow}>
+                        <Zap size={13} color={Colors.warning} />
+                        <Text style={[styles.bulletText, { color: colors.textSecondary }]}>{rec}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <View style={styles.bulletRow}>
+                      <Zap size={13} color={Colors.warning} />
+                      <Text style={[styles.bulletText, { color: colors.textSecondary }]}>
+                        Target {fiberTarget}g fiber daily by including sprouted lentils and dark leafy vegetables.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </GlassCard>
+
+              {/* 10. Personalized Diet Plan */}
               <GlassCard style={styles.dietPlanCard} padding={16}>
                 <View style={styles.dietPlanHeader}>
                   <ShieldCheck size={18} color={colors.primaryViolet} />
                   <Text style={[styles.dietPlanTitle, { color: colors.textPrimary }]}>
-                    {dailyAnalysis ? 'Daily AI Health Coach Guidance' : 'Personalized Hypertrophy Diet Plan'}
+                    Personalized Diet Plan
                   </Text>
-                  <Badge label="AI GENERATED" variant="primary" size="sm" />
+                  <Badge label="AI CALIBRATED" variant="primary" size="sm" />
                 </View>
 
-                {dailyAnalysis?.tomorrow_recommendations && dailyAnalysis.tomorrow_recommendations.length > 0 ? (
-                  dailyAnalysis.tomorrow_recommendations.map((rec, idx) => (
-                    <View key={idx} style={styles.planBulletItem}>
-                      <View style={[styles.planDot, { backgroundColor: colors.primaryViolet }]} />
-                      <Text style={[styles.planText, { color: colors.textSecondary }]}>
-                        {rec}
-                      </Text>
-                    </View>
-                  ))
-                ) : (
-                  <>
-                    <View style={styles.planBulletItem}>
-                      <View style={[styles.planDot, { backgroundColor: colors.primaryViolet }]} />
-                      <Text style={[styles.planText, { color: colors.textSecondary }]}>
-                        Target 1.8g – 2.0g protein per kg bodyweight (aiming for ~150g daily) to support muscle protein synthesis.
-                      </Text>
-                    </View>
-                    <View style={styles.planBulletItem}>
-                      <View style={[styles.planDot, { backgroundColor: colors.primaryViolet }]} />
-                      <Text style={[styles.planText, { color: colors.textSecondary }]}>
-                        Focus pre-workout intake on complex carbohydrates ~90 mins prior to AI Barbell Squat sessions for optimal glycogen stores.
-                      </Text>
-                    </View>
-                    <View style={styles.planBulletItem}>
-                      <View style={[styles.planDot, { backgroundColor: colors.primaryViolet }]} />
-                      <Text style={[styles.planText, { color: colors.textSecondary }]}>
-                        Maintain consistent 3.0L water intake to prevent premature muscle cramping and elevate cellular hydration.
-                      </Text>
-                    </View>
-                  </>
-                )}
+                <View style={[styles.dietPlanSummaryRow, { backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)' }]}>
+                  <View style={styles.dietPlanSummaryCol}>
+                    <Text style={[styles.dietPlanMetricLabel, { color: colors.textMuted }]}>BMR</Text>
+                    <Text style={[styles.dietPlanMetricVal, { color: colors.textPrimary }]}>{num(bmr || 1800)} kcal</Text>
+                  </View>
+                  <View style={styles.dietPlanSummaryCol}>
+                    <Text style={[styles.dietPlanMetricLabel, { color: colors.textMuted }]}>TDEE</Text>
+                    <Text style={[styles.dietPlanMetricVal, { color: colors.textPrimary }]}>{num(tdee || 2700)} kcal</Text>
+                  </View>
+                  <View style={styles.dietPlanSummaryCol}>
+                    <Text style={[styles.dietPlanMetricLabel, { color: colors.textMuted }]}>PROTEIN RATIO</Text>
+                    <Text style={[styles.dietPlanMetricVal, { color: colors.primaryViolet }]}>
+                      {Math.round((proteinTarget * 4 * 100) / (calorieTarget || 2200))}%
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={[styles.planText, { color: colors.textSecondary }]}>
+                  Calibrated for lean hypertrophy and active kinetic recovery. Meal distribution emphasizes 25% Breakfast, 35% Lunch, 15% Snacks, and 25% Dinner.
+                </Text>
+
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setDietPlanModalVisible(true)}
+                  style={[styles.customizePlanBtn, { borderColor: colors.primary }]}
+                >
+                  <Sliders size={14} color={colors.primary} />
+                  <Text style={[styles.customizePlanBtnText, { color: colors.primary }]}>
+                    Customize / Recalculate Diet Plan
+                  </Text>
+                </TouchableOpacity>
+
                 <Text style={[styles.planDisclaimer, { color: colors.textMuted }]}>
                   *AI generated nutritional guidance. Consult your sports nutritionist or physician for clinical diet interventions.
                 </Text>
@@ -557,218 +918,219 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ navigation }) =>
                 </TouchableOpacity>
               </View>
 
-              {/* Weekly Overview Card */}
-              <GlassCard variant="glow" style={styles.weeklyOverviewCard} padding={16}>
-                <Text style={[styles.overviewSub, { color: colors.textSecondary }]}>WEEK PERFORMANCE SUMMARY</Text>
-                <View style={styles.overviewStatsRow}>
-                  <View style={styles.overviewStatCol}>
-                    <Text style={[styles.overviewStatVal, { color: colors.textPrimary }]}>
-                      {num(weeklyReport?.workout.workout_days ?? 4)} / {num(5)}
-                    </Text>
-                    <Text style={[styles.overviewStatLabel, { color: colors.textSecondary }]}>WORKOUTS</Text>
-                  </View>
-                  <View style={[styles.overviewDivider, { backgroundColor: colors.border }]} />
-                  <View style={styles.overviewStatCol}>
-                    <Text style={[styles.overviewStatVal, { color: colors.neonGreen }]}>{num('94.2')}%</Text>
-                    <Text style={[styles.overviewStatLabel, { color: colors.textSecondary }]}>AVG FORM</Text>
-                  </View>
-                  <View style={[styles.overviewDivider, { backgroundColor: colors.border }]} />
-                  <View style={styles.overviewStatCol}>
-                    <Text style={[styles.overviewStatVal, { color: colors.warning }]}>
-                      {weeklyReport ? `${num(weeklyReport.weekly_score)}/100` : `+${num('1,240')}`}
-                    </Text>
-                    <Text style={[styles.overviewStatLabel, { color: colors.textSecondary }]}>
-                      {weeklyReport ? 'WEEK SCORE' : 'XP GAINED'}
-                    </Text>
-                  </View>
-                </View>
-              </GlassCard>
-
-              {/* AI Weekly Health Intelligence Summary */}
-              {weeklyReport?.ai_analysis ? (
-                <GlassCard style={[styles.improvementsCard, { borderColor: colors.accentSky, backgroundColor: isDark ? 'rgba(56, 189, 248, 0.06)' : 'rgba(56, 189, 248, 0.04)' }]} padding={16}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Sparkles size={16} color={colors.accentSky} />
-                      <Text style={[styles.subSectionTitle, { color: colors.accentSky, marginBottom: 0 }]}>AI WEEKLY INTELLIGENCE</Text>
-                    </View>
-                    <Badge
-                      label={weeklyReport.score_change > 0 ? `+${weeklyReport.score_change} PTS` : `${weeklyReport.weekly_score} PTS`}
-                      variant={weeklyReport.score_change > 0 ? 'success' : 'primary'}
-                      size="sm"
-                    />
-                  </View>
-                  <Text style={[styles.improvementText, { color: colors.textPrimary, lineHeight: 21, fontWeight: '500' }]}>
-                    {weeklyReport.ai_analysis}
+              {daysTracked === 0 ? (
+                <GlassCard style={{ alignItems: 'center', justifyContent: 'center', marginVertical: 8 }} padding={24}>
+                  <Sparkles size={32} color={colors.primary} />
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: colors.textPrimary, textAlign: 'center', marginTop: 12 }}>
+                    Start tracking your daily activities to unlock your weekly report
+                  </Text>
+                  <Text style={{ fontSize: 13, color: colors.textSecondary, textAlign: 'center', marginTop: 6, lineHeight: 18 }}>
+                    Log your meals, workouts, and hydration to generate AI weekly diagnostics and performance trends.
                   </Text>
                 </GlassCard>
-              ) : null}
+              ) : (
+                <>
+                  {daysTracked < 7 && (
+                    <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, backgroundColor: `${colors.accentSky}18`, borderWidth: 1, borderColor: `${colors.accentSky}40`, marginBottom: 6 }}>
+                      <Clock size={12} color={colors.accentSky} />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: colors.accentSky }}>
+                        {num(daysTracked)} {daysTracked === 1 ? 'day' : 'days'} of data available
+                      </Text>
+                    </View>
+                  )}
 
-              {/* Weekly Nutrition Averages */}
-              <GlassCard style={styles.weeklyNutritionCard} padding={14}>
-                <Text style={[styles.subSectionTitle, { color: colors.textSecondary }]}>WEEKLY NUTRITION AVERAGES</Text>
-                <View style={styles.weeklyNutriRow}>
-                  <View style={styles.nutriTile}>
-                    <Utensils size={16} color={colors.primary} />
-                    <Text style={[styles.nutriTileVal, { color: colors.textPrimary }]}>
-                      {weeklyReport ? num(weeklyReport.nutrition.average_calories.toLocaleString()) : num('2,120')}
-                    </Text>
-                    <Text style={[styles.nutriTileLabel, { color: colors.textSecondary }]}>kcal / day</Text>
-                  </View>
-                  <View style={styles.nutriTile}>
-                    <Dumbbell size={16} color={colors.primaryViolet} />
-                    <Text style={[styles.nutriTileVal, { color: colors.textPrimary }]}>
-                      {weeklyReport ? num(weeklyReport.nutrition.average_protein) : num(138)}g
-                    </Text>
-                    <Text style={[styles.nutriTileLabel, { color: colors.textSecondary }]}>protein / day</Text>
-                  </View>
-                  <View style={styles.nutriTile}>
-                    <Droplets size={16} color={colors.accentSky} />
-                    <Text style={[styles.nutriTileVal, { color: colors.textPrimary }]}>
-                      {weeklyReport ? num((weeklyReport.hydration.daily_average_ml / 250).toFixed(1)) : num('6.4')}
-                    </Text>
-                    <Text style={[styles.nutriTileLabel, { color: colors.textSecondary }]}>glasses / day</Text>
-                  </View>
-                </View>
-              </GlassCard>
-
-              {/* Stress Level Scale Bar */}
-              <StressScaleBar
-                score={
-                  weeklyReport
-                    ? Math.max(1, Math.min(5, Math.round(weeklyReport.stress.average_level)))
-                    : dailyAnalysis?.category_scores
-                    ? dailyAnalysis.category_scores.stress >= 90
-                      ? 1
-                      : dailyAnalysis.category_scores.stress >= 75
-                      ? 2
-                      : dailyAnalysis.category_scores.stress >= 60
-                      ? 3
-                      : 4
-                    : 2
-                }
-              />
-
-              {/* Improvements List */}
-              <GlassCard style={styles.improvementsCard} padding={16}>
-                <Text style={[styles.subSectionTitle, { color: colors.textSecondary }]}>COACH IMPROVEMENTS & WINS</Text>
-                {weeklyReport?.improvements && weeklyReport.improvements.length > 0 ? (
-                  weeklyReport.improvements.map((item: string, idx: number) => (
-                    <View key={idx} style={styles.improvementRow}>
-                      <TrendingUp size={16} color={colors.success} />
-                      <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                        {item}
-                      </Text>
-                    </View>
-                  ))
-                ) : dailyAnalysis?.positives && dailyAnalysis.positives.length > 0 ? (
-                  dailyAnalysis.positives.slice(0, 3).map((item: string, idx: number) => (
-                    <View key={idx} style={styles.improvementRow}>
-                      <TrendingUp size={16} color={colors.success} />
-                      <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                        {item}
-                      </Text>
-                    </View>
-                  ))
-                ) : (
-                  <>
-                    <View style={styles.improvementRow}>
-                      <TrendingUp size={16} color={colors.success} />
-                      <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                        Form score up +6.2% vs previous week on AI Barbell Squats.
-                      </Text>
-                    </View>
-                    <View style={styles.improvementRow}>
-                      <TrendingUp size={16} color={colors.success} />
-                      <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                        Hit hydration goal on 5 out of 7 days (+1 day improvement).
-                      </Text>
-                    </View>
-                    <View style={styles.improvementRow}>
-                      <TrendingUp size={16} color={colors.accentSky} />
-                      <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                        Shoulder stability locked during dynamic pushups with 0 shear alarms.
-                      </Text>
-                    </View>
-                  </>
-                )}
-
-                {/* Problems & Focus Areas */}
-                {weeklyReport?.problems && weeklyReport.problems.length > 0 ? (
-                  <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
-                    <Text style={[styles.subSectionTitle, { color: colors.warning, marginBottom: 8 }]}>AREAS REQUIRING ATTENTION</Text>
-                    {weeklyReport.problems.map((item: string, idx: number) => (
-                      <View key={idx} style={styles.improvementRow}>
-                        <Sparkles size={16} color={colors.warning} />
-                        <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                          {item}
+                  {/* Weekly Overview Card */}
+                  <GlassCard variant="glow" style={styles.weeklyOverviewCard} padding={16}>
+                    <Text style={[styles.overviewSub, { color: colors.textSecondary }]}>WEEK PERFORMANCE SUMMARY</Text>
+                    <View style={styles.overviewStatsRow}>
+                      <View style={styles.overviewStatCol}>
+                        <Text style={[styles.overviewStatVal, { color: colors.textPrimary }]}>
+                          {num(weeklyReport?.workout.workout_days ?? (exerciseLogged ? 1 : 0))} / {num(5)}
+                        </Text>
+                        <Text style={[styles.overviewStatLabel, { color: colors.textSecondary }]}>WORKOUTS</Text>
+                      </View>
+                      <View style={[styles.overviewDivider, { backgroundColor: colors.border }]} />
+                      <View style={styles.overviewStatCol}>
+                        <Text style={[styles.overviewStatVal, { color: colors.neonGreen }]}>{num(weeklyReport ? '94.2' : '92.0')}%</Text>
+                        <Text style={[styles.overviewStatLabel, { color: colors.textSecondary }]}>AVG FORM</Text>
+                      </View>
+                      <View style={[styles.overviewDivider, { backgroundColor: colors.border }]} />
+                      <View style={styles.overviewStatCol}>
+                        <Text style={[styles.overviewStatVal, { color: colors.warning }]}>
+                          {weeklyReport ? `${num(weeklyReport.weekly_score)}/100` : `${num(fitScoreData?.fit_score ?? 85)}/100`}
+                        </Text>
+                        <Text style={[styles.overviewStatLabel, { color: colors.textSecondary }]}>
+                          {weeklyReport ? 'WEEK SCORE' : 'FIT SCORE'}
                         </Text>
                       </View>
-                    ))}
-                  </View>
-                ) : dailyAnalysis?.areas_to_improve && dailyAnalysis.areas_to_improve.length > 0 ? (
-                  <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
-                    <Text style={[styles.subSectionTitle, { color: colors.textSecondary, marginBottom: 8 }]}>COACH FOCUS TOMORROW</Text>
-                    {dailyAnalysis.areas_to_improve.map((item: string, idx: number) => (
-                      <View key={idx} style={styles.improvementRow}>
-                        <Sparkles size={16} color={colors.warning} />
-                        <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                          {item}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                ) : null}
-
-                {/* Next Week Action Plan */}
-                {weeklyReport?.next_week_plan && (
-                  <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
-                    <Text style={[styles.subSectionTitle, { color: colors.primary, marginBottom: 8 }]}>NEXT WEEK ACTION PLAN</Text>
-                    {[
-                      ...weeklyReport.next_week_plan.nutrition.slice(0, 1),
-                      ...weeklyReport.next_week_plan.workout.slice(0, 1),
-                      ...weeklyReport.next_week_plan.sleep.slice(0, 1),
-                    ].map((planItem: string, idx: number) => (
-                      <View key={idx} style={styles.improvementRow}>
-                        <CheckCircle2 size={16} color={colors.neonGreen} />
-                        <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
-                          {planItem}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </GlassCard>
-
-              {/* Full Week Breakdown Table */}
-              <GlassCard style={styles.breakdownTableCard} padding={14}>
-                <Text style={[styles.subSectionTitle, { color: colors.textSecondary }]}>FULL 7-DAY BREAKDOWN</Text>
-                <View style={styles.tableWrap}>
-                  {[
-                    { day: 'Mon', done: true, water: 7, kcal: 2150, note: 'AI Squats • Form 96%' },
-                    { day: 'Tue', done: true, water: 8, kcal: 2200, note: 'Strict Curls • Form 94%' },
-                    { day: 'Wed', done: false, water: 5, kcal: 1950, note: 'Rest & Mobility' },
-                    { day: 'Thu', done: true, water: 6, kcal: 2080, note: 'Lunges • Form 92%' },
-                    { day: 'Fri', done: true, water: 8, kcal: 2250, note: 'Deadlifts • Form 95%' },
-                    { day: 'Sat', done: false, water: 5, kcal: 2000, note: 'Active Foam Roll' },
-                    { day: 'Sun', done: false, water: 6, kcal: 2210, note: 'Weekly Prep' },
-                  ].map((row, idx) => (
-                    <View key={idx} style={styles.tableRow}>
-                      <Text style={[styles.tableDay, { color: colors.textPrimary }]}>{row.day}</Text>
-                      <View style={styles.tableStatusCol}>
-                        {row.done ? (
-                          <CheckCircle2 size={15} color={colors.neonGreen} />
-                        ) : (
-                          <XCircle size={15} color={colors.textMuted} />
-                        )}
-                      </View>
-                      <Text style={[styles.tableMetric, { color: colors.textPrimary }]}>{num(row.water)} gls</Text>
-                      <Text style={[styles.tableMetric, { color: colors.textPrimary }]}>{num(row.kcal)} kcal</Text>
-                      <Text numberOfLines={1} style={[styles.tableNote, { color: colors.textSecondary }]}>{row.note}</Text>
                     </View>
-                  ))}
-                </View>
-              </GlassCard>
+                  </GlassCard>
+
+                  {/* AI Weekly Health Intelligence Summary */}
+                  {weeklyReport?.ai_analysis ? (
+                    <GlassCard style={[styles.improvementsCard, { borderColor: colors.accentSky, backgroundColor: isDark ? 'rgba(56, 189, 248, 0.06)' : 'rgba(56, 189, 248, 0.04)' }]} padding={16}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Sparkles size={16} color={colors.accentSky} />
+                          <Text style={[styles.subSectionTitle, { color: colors.accentSky, marginBottom: 0 }]}>AI WEEKLY INTELLIGENCE</Text>
+                        </View>
+                        <Badge
+                          label={weeklyReport.score_change > 0 ? `+${weeklyReport.score_change} PTS` : `${weeklyReport.weekly_score} PTS`}
+                          variant={weeklyReport.score_change > 0 ? 'success' : 'primary'}
+                          size="sm"
+                        />
+                      </View>
+                      <Text style={[styles.improvementText, { color: colors.textPrimary, lineHeight: 21, fontWeight: '500' }]}>
+                        {weeklyReport.ai_analysis}
+                      </Text>
+                    </GlassCard>
+                  ) : null}
+
+                  {/* Weekly Nutrition Averages */}
+                  <GlassCard style={styles.weeklyNutritionCard} padding={14}>
+                    <Text style={[styles.subSectionTitle, { color: colors.textSecondary }]}>WEEKLY NUTRITION AVERAGES</Text>
+                    <View style={styles.weeklyNutriRow}>
+                      <View style={styles.nutriTile}>
+                        <Utensils size={16} color={colors.primary} />
+                        <Text style={[styles.nutriTileVal, { color: colors.textPrimary }]}>
+                          {weeklyReport ? num(weeklyReport.nutrition.average_calories.toLocaleString()) : num(totals.calories.toLocaleString())}
+                        </Text>
+                        <Text style={[styles.nutriTileLabel, { color: colors.textSecondary }]}>kcal / day</Text>
+                      </View>
+                      <View style={styles.nutriTile}>
+                        <Dumbbell size={16} color={colors.primaryViolet} />
+                        <Text style={[styles.nutriTileVal, { color: colors.textPrimary }]}>
+                          {weeklyReport ? num(weeklyReport.nutrition.average_protein) : num(totals.protein)}g
+                        </Text>
+                        <Text style={[styles.nutriTileLabel, { color: colors.textSecondary }]}>protein / day</Text>
+                      </View>
+                      <View style={styles.nutriTile}>
+                        <Droplets size={16} color={colors.accentSky} />
+                        <Text style={[styles.nutriTileVal, { color: colors.textPrimary }]}>
+                          {weeklyReport ? num((weeklyReport.hydration.daily_average_ml / 250).toFixed(1)) : num(waterGlasses)}
+                        </Text>
+                        <Text style={[styles.nutriTileLabel, { color: colors.textSecondary }]}>glasses / day</Text>
+                      </View>
+                    </View>
+                  </GlassCard>
+
+                  {/* Stress Level Scale Bar */}
+                  <StressScaleBar
+                    score={
+                      weeklyReport
+                        ? Math.max(1, Math.min(5, Math.round(weeklyReport.stress.average_level)))
+                        : dailyAnalysis?.category_scores
+                        ? dailyAnalysis.category_scores.stress >= 90
+                          ? 1
+                          : dailyAnalysis.category_scores.stress >= 75
+                          ? 2
+                          : dailyAnalysis.category_scores.stress >= 60
+                          ? 3
+                          : 4
+                        : 2
+                    }
+                  />
+
+                  {/* Improvements List */}
+                  <GlassCard style={styles.improvementsCard} padding={16}>
+                    <Text style={[styles.subSectionTitle, { color: colors.textSecondary }]}>COACH IMPROVEMENTS & WINS</Text>
+                    {weeklyReport?.improvements && weeklyReport.improvements.length > 0 ? (
+                      weeklyReport.improvements.map((item: string, idx: number) => (
+                        <View key={idx} style={styles.improvementRow}>
+                          <TrendingUp size={16} color={colors.success} />
+                          <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
+                            {item}
+                          </Text>
+                        </View>
+                      ))
+                    ) : dailyAnalysis?.positives && dailyAnalysis.positives.length > 0 ? (
+                      dailyAnalysis.positives.slice(0, 3).map((item: string, idx: number) => (
+                        <View key={idx} style={styles.improvementRow}>
+                          <TrendingUp size={16} color={colors.success} />
+                          <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
+                            {item}
+                          </Text>
+                        </View>
+                      ))
+                    ) : (
+                      <View style={styles.improvementRow}>
+                        <TrendingUp size={16} color={colors.textSecondary} />
+                        <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
+                          Keep tracking meals, workouts, and hydration to unlock personalized AI coaching insights.
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Problems & Focus Areas */}
+                    {weeklyReport?.problems && weeklyReport.problems.length > 0 ? (
+                      <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
+                        <Text style={[styles.subSectionTitle, { color: colors.warning, marginBottom: 8 }]}>AREAS REQUIRING ATTENTION</Text>
+                        {weeklyReport.problems.map((item: string, idx: number) => (
+                          <View key={idx} style={styles.improvementRow}>
+                            <Sparkles size={16} color={colors.warning} />
+                            <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
+                              {item}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : dailyAnalysis?.areas_to_improve && dailyAnalysis.areas_to_improve.length > 0 ? (
+                      <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
+                        <Text style={[styles.subSectionTitle, { color: colors.textSecondary, marginBottom: 8 }]}>COACH FOCUS TOMORROW</Text>
+                        {dailyAnalysis.areas_to_improve.map((item: string, idx: number) => (
+                          <View key={idx} style={styles.improvementRow}>
+                            <Sparkles size={16} color={colors.warning} />
+                            <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
+                              {item}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+
+                    {/* Next Week Action Plan */}
+                    {weeklyReport?.next_week_plan && (
+                      <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
+                        <Text style={[styles.subSectionTitle, { color: colors.primary, marginBottom: 8 }]}>NEXT WEEK ACTION PLAN</Text>
+                        {[
+                          ...weeklyReport.next_week_plan.nutrition.slice(0, 1),
+                          ...weeklyReport.next_week_plan.workout.slice(0, 1),
+                          ...weeklyReport.next_week_plan.sleep.slice(0, 1),
+                        ].map((planItem: string, idx: number) => (
+                          <View key={idx} style={styles.improvementRow}>
+                            <CheckCircle2 size={16} color={colors.neonGreen} />
+                            <Text style={[styles.improvementText, { color: colors.textSecondary }]}>
+                              {planItem}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </GlassCard>
+
+                  {/* Full Week Breakdown Table */}
+                  <GlassCard style={styles.breakdownTableCard} padding={14}>
+                    <Text style={[styles.subSectionTitle, { color: colors.textSecondary }]}>FULL 7-DAY BREAKDOWN</Text>
+                    <View style={styles.tableWrap}>
+                      {realBreakdown.map((row, idx) => (
+                        <View key={idx} style={styles.tableRow}>
+                          <Text style={[styles.tableDay, { color: colors.textPrimary }]}>{row.day}</Text>
+                          <View style={styles.tableStatusCol}>
+                            {row.done ? (
+                              <CheckCircle2 size={15} color={colors.neonGreen} />
+                            ) : (
+                              <XCircle size={15} color={colors.textMuted} />
+                            )}
+                          </View>
+                          <Text style={[styles.tableMetric, { color: colors.textPrimary }]}>{num(row.water)} gls</Text>
+                          <Text style={[styles.tableMetric, { color: colors.textPrimary }]}>{num(row.kcal)} kcal</Text>
+                          <Text numberOfLines={1} style={[styles.tableNote, { color: colors.textSecondary }]}>{row.note}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </GlassCard>
+                </>
+              )}
             </View>
           )}
         </Animated.View>
@@ -777,6 +1139,14 @@ export const ProgressScreen: React.FC<ProgressScreenProps> = ({ navigation }) =>
         <LogFoodModal
           visible={logModalVisible}
           onClose={() => setLogModalVisible(false)}
+          initialTab={logFoodTab}
+          initialMealType={selectedMealType}
+        />
+
+        {/* AI Personalized Diet Plan Customizer Modal */}
+        <DietPlanModal
+          visible={dietPlanModalVisible}
+          onClose={() => setDietPlanModalVisible(false)}
         />
       </ScrollView>
     </ScreenContainer>
@@ -856,87 +1226,293 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginTop: 2,
   },
-  nutritionSummaryCard: {
-    gap: 14,
-  },
-  ringsRow: {
+  dietTopHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  aiInsightRow: {
+  quickLogButtonsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 2,
+  },
+  quickLogBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  quickLogBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  calorieHeroCard: {
+    gap: 10,
+  },
+  calorieHeroHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  metricHeaderLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  calorieNumberRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+    marginTop: 2,
+  },
+  calorieBigNumber: {
+    fontSize: 26,
+    fontWeight: '900',
+  },
+  calorieTargetDivider: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  calorieTargetNumber: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  calorieBadgeWrap: {
+    alignItems: 'flex-end',
+  },
+  calorieProgressBarTrack: {
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  calorieProgressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  macroCardsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  macroCardItem: {
+    width: '48.5%',
+    gap: 4,
+  },
+  macroCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  macroCardTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  macroCardPct: {
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  macroValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+  },
+  macroValueBig: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  macroValueTarget: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  macroBarTrack: {
+    height: 6,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginTop: 2,
+  },
+  macroBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  waterCard: {
+    gap: 6,
+  },
+  waterCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  waterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  waterTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  waterSubtitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  waterActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(34, 255, 176, 0.08)',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(34, 255, 176, 0.2)',
   },
-  aiInsightText: {
-    fontSize: 11,
-    color: Colors.textPrimary,
-    fontWeight: '600',
-    flex: 1,
-    lineHeight: 16,
+  waterIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   mealsHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 6,
+    marginTop: 4,
   },
   sectionHeadingSmall: {
     fontSize: 11,
     fontWeight: '800',
-    color: Colors.textSecondary,
     letterSpacing: 0.8,
   },
   mealsCount: {
     fontSize: 11,
     fontWeight: '600',
-    color: Colors.textMuted,
   },
-  mealsList: {
+  mealSectionCard: {
     gap: 8,
   },
-  mealCard: {
+  mealSectionTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  mealLeft: {
-    gap: 4,
-    flex: 1,
-  },
-  mealTypeBadgeWrap: {
+  mealSectionTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
+    flex: 1,
+  },
+  mealSectionEmoji: {
+    fontSize: 16,
+  },
+  mealSectionLabel: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  mealSectionSubtotal: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  addMealPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  addMealPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  mealItemsCol: {
+    gap: 4,
+    marginTop: 2,
+  },
+  mealRowItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  mealLeft: {
+    flex: 1,
+    gap: 2,
+  },
+  mealName: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   mealTime: {
     fontSize: 10,
-    color: Colors.textMuted,
-    fontWeight: '600',
+    fontWeight: '500',
   },
-  mealName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  mealRight: {
-    alignItems: 'flex-end',
+  mealRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   mealCalories: {
     fontSize: 13,
     fontWeight: '800',
-    color: Colors.textPrimary,
   },
   mealProtein: {
     fontSize: 11,
-    color: Colors.primaryViolet,
     fontWeight: '700',
+  },
+  deleteMealBtn: {
+    padding: 6,
+  },
+  emptyMealBox: {
+    paddingVertical: 6,
+  },
+  emptyMealText: {
+    fontSize: 11,
+    fontStyle: 'italic',
+  },
+  aiAnalysisCard: {
+    gap: 8,
+  },
+  aiAnalysisHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  aiAnalysisHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  aiAnalysisTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  aiAnalysisBody: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  analysisBulletsWrap: {
+    gap: 6,
+    marginTop: 4,
+  },
+  bulletSectionLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  bulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  bulletText: {
+    fontSize: 11,
+    lineHeight: 16,
+    flex: 1,
   },
   dietPlanCard: {
     gap: 10,
@@ -945,35 +1521,52 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 4,
   },
   dietPlanTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: Colors.textPrimary,
     flex: 1,
   },
-  planBulletItem: {
+  dietPlanSummaryRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
+    borderRadius: 10,
+    padding: 10,
+    justifyContent: 'space-around',
+    marginVertical: 2,
   },
-  planDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: Colors.primaryViolet,
-    marginTop: 6,
+  dietPlanSummaryCol: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  dietPlanMetricLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  dietPlanMetricVal: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  customizePlanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 4,
+  },
+  customizePlanBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   planText: {
     fontSize: 12,
-    color: Colors.textSecondary,
     lineHeight: 18,
-    flex: 1,
   },
   planDisclaimer: {
     fontSize: 10,
-    color: Colors.textMuted,
     marginTop: 4,
     fontStyle: 'italic',
   },

@@ -1,31 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import * as Haptics from 'expo-haptics';
 import { useWorkoutSessionStore } from '../../../stores/workoutSessionStore';
-
-const COACHING_CUES = [
-  'Keep chest upright & core engaged',
-  'Good depth! Hips below parallel',
-  'Knees tracking slightly outward',
-  'Keep your back straighter',
-  'Drive upward through heels',
-  'Smooth tempo — great cadence',
-  'Maintain neutral cervical spine',
-];
-
-const FORM_SCORES_POOL = [92, 95, 88, 96, 91, 94, 89, 97, 93];
+import {
+  ExerciseStateMachine,
+  PoseLandmarks,
+  KinematicFrameResult,
+  ExerciseType,
+} from '../../../services/pose/poseKinematics';
 
 /**
  * useWorkoutEngine
  * 
- * Modular hook encapsulating the workout session lifecycle, rep-counting,
- * form-scoring, cadence intervals, and biomechanical feedback cues.
- *
- * NOTE FOR AI/CV TEAM:
- * To integrate real computer vision (MediaPipe / MoveNet landmarks):
- * 1. Replace the timer-based rep trigger in this hook with your joint-angle peak-valley detector.
- * 2. Feed calculated real-time form accuracy (0-100) into `recordFormScore(liveScore)`.
- * 3. Feed rule-based biomechanic error messages into `setFeedbackMessage(liveWarning)`.
- * The UI layer in `MirrorScreen` and its subcomponents will immediately respond without changes!
+ * Modular hook driving the AI Fitness Mirror session lifecycle, real-time kinematic
+ * pose evaluation, exercise-specific state machines, rep-counting with hysteresis,
+ * and rule-based biomechanical coaching cues.
  */
 export const useWorkoutEngine = () => {
   const {
@@ -38,35 +26,142 @@ export const useWorkoutEngine = () => {
     incrementReps,
     recordFormScore,
     setFeedbackMessage,
+    addMistake,
     setPersonDetected,
     setStatus,
     incrementTimer,
+    setLiveAngles,
     completeSession,
   } = useWorkoutSessionStore();
 
   const [isAutoRepsEnabled, setIsAutoRepsEnabled] = useState(true);
-  const feedbackIndexRef = useRef(0);
-  const scoreIndexRef = useRef(0);
 
-  // Manual or automatic rep increment with haptics and score update
+  // Dedicated Exercise State Machine instance
+  const stateMachineRef = useRef<ExerciseStateMachine>(
+    new ExerciseStateMachine(currentExercise.typeKey as ExerciseType)
+  );
+
+  // Sync state machine when exercise changes
+  useEffect(() => {
+    stateMachineRef.current.setExercise(currentExercise.typeKey as ExerciseType);
+  }, [currentExercise.typeKey]);
+
+  // Evaluate raw or camera-detected landmarks through kinematics engine
+  const evaluatePoseLandmarks = useCallback(
+    (landmarks: PoseLandmarks): KinematicFrameResult => {
+      const result = stateMachineRef.current.processFrame(landmarks);
+
+      setLiveAngles(result.angles);
+
+      if (result.repIncremented) {
+        try {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        } catch {}
+        incrementReps();
+      }
+
+      recordFormScore(result.liveFormScore);
+      setFeedbackMessage(result.feedbackMessage);
+
+      if (result.detectedMistake) {
+        addMistake(result.detectedMistake);
+      }
+
+      return result;
+    },
+    [incrementReps, recordFormScore, setFeedbackMessage, addMistake, setLiveAngles]
+  );
+
+  // Manual or simulated rep trigger utilizing the active exercise state machine
   const triggerRep = useCallback(() => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch {
-      // Haptics safe fallback
+    } catch {}
+
+    const sm = stateMachineRef.current;
+    const exerciseType = currentExercise.typeKey;
+
+    // Generate dynamic kinematic landmarks matching the peak flexion of the selected movement
+    let bottomLandmarks: PoseLandmarks = {};
+
+    switch (exerciseType) {
+      case 'squat':
+        bottomLandmarks = {
+          leftHip: { x: 140, y: 220 },
+          rightHip: { x: 160, y: 220 },
+          leftKnee: { x: 130, y: 255 },
+          rightKnee: { x: 170, y: 255 },
+          leftAnkle: { x: 132, y: 310 },
+          rightAnkle: { x: 168, y: 310 },
+          leftShoulder: { x: 135, y: 140 },
+          rightShoulder: { x: 165, y: 140 },
+        };
+        break;
+      case 'push_up':
+        bottomLandmarks = {
+          leftShoulder: { x: 90, y: 190 },
+          leftElbow: { x: 75, y: 175 },
+          leftWrist: { x: 75, y: 210 },
+          leftHip: { x: 160, y: 190 },
+          leftKnee: { x: 210, y: 190 },
+          leftAnkle: { x: 260, y: 190 },
+        };
+        break;
+      case 'lunge':
+        bottomLandmarks = {
+          leftHip: { x: 140, y: 210 },
+          leftKnee: { x: 110, y: 250 },
+          leftAnkle: { x: 110, y: 300 },
+          rightKnee: { x: 190, y: 280 },
+          rightAnkle: { x: 220, y: 300 },
+          leftShoulder: { x: 140, y: 130 },
+        };
+        break;
+      case 'plank':
+        bottomLandmarks = {
+          leftShoulder: { x: 90, y: 180 },
+          leftElbow: { x: 90, y: 210 },
+          leftHip: { x: 160, y: 180 },
+          leftKnee: { x: 210, y: 180 },
+          leftAnkle: { x: 260, y: 180 },
+        };
+        break;
+      case 'jumping_jack':
+        bottomLandmarks = {
+          leftShoulder: { x: 130, y: 130 },
+          leftElbow: { x: 100, y: 80 },
+          leftWrist: { x: 85, y: 40 },
+          rightShoulder: { x: 170, y: 130 },
+          rightElbow: { x: 200, y: 80 },
+          rightWrist: { x: 215, y: 40 },
+          leftHip: { x: 135, y: 200 },
+          rightHip: { x: 165, y: 200 },
+          leftAnkle: { x: 100, y: 310 },
+          rightAnkle: { x: 200, y: 310 },
+        };
+        break;
     }
 
-    incrementReps();
+    // Step 1: Reach inflection/bottom
+    evaluatePoseLandmarks(bottomLandmarks);
 
-    // Fluctuating realistic form score
-    scoreIndexRef.current = (scoreIndexRef.current + 1) % FORM_SCORES_POOL.length;
-    const nextScore = FORM_SCORES_POOL[scoreIndexRef.current];
-    recordFormScore(nextScore);
-
-    // Rotating coaching cues
-    feedbackIndexRef.current = (feedbackIndexRef.current + 1) % COACHING_CUES.length;
-    setFeedbackMessage(COACHING_CUES[feedbackIndexRef.current]);
-  }, [incrementReps, recordFormScore, setFeedbackMessage]);
+    // Step 2: Return to upright/start to complete rep
+    setTimeout(() => {
+      const topLandmarks: PoseLandmarks = {
+        leftHip: { x: 140, y: 190 },
+        rightHip: { x: 160, y: 190 },
+        leftKnee: { x: 140, y: 250 },
+        rightKnee: { x: 160, y: 250 },
+        leftAnkle: { x: 140, y: 310 },
+        rightAnkle: { x: 160, y: 310 },
+        leftShoulder: { x: 135, y: 120 },
+        rightShoulder: { x: 165, y: 120 },
+        leftElbow: { x: 120, y: 155 },
+        leftWrist: { x: 120, y: 195 },
+      };
+      evaluatePoseLandmarks(topLandmarks);
+    }, 450);
+  }, [currentExercise.typeKey, evaluatePoseLandmarks]);
 
   // Elapsed workout timer
   useEffect(() => {
@@ -79,16 +174,16 @@ export const useWorkoutEngine = () => {
     return () => clearInterval(timer);
   }, [status, incrementTimer]);
 
-  // Simulated rep counter interval (fires every 3.8 seconds if auto-reps is enabled)
+  // Plank isometric hold timer (strictly for isometric exercises when active & athlete detected)
   useEffect(() => {
-    if (status !== 'active' || !isAutoRepsEnabled || !isPersonDetected) return;
+    if (status !== 'active' || currentExercise.typeKey !== 'plank' || !isPersonDetected) return;
 
-    const repInterval = setInterval(() => {
-      triggerRep();
-    }, 3800);
+    const interval = setInterval(() => {
+      incrementReps();
+    }, 1000);
 
-    return () => clearInterval(repInterval);
-  }, [status, isAutoRepsEnabled, isPersonDetected, triggerRep]);
+    return () => clearInterval(interval);
+  }, [status, currentExercise.typeKey, isPersonDetected, incrementReps]);
 
   const pause = useCallback(() => {
     try {
@@ -133,6 +228,8 @@ export const useWorkoutEngine = () => {
     timerSeconds,
     isPersonDetected,
     isAutoRepsEnabled,
+    stateMachine: stateMachineRef.current,
+    evaluatePoseLandmarks,
     triggerRep,
     toggleAutoReps,
     togglePersonDetected,

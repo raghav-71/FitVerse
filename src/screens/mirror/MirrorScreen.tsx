@@ -9,7 +9,9 @@ import {
   Platform,
   Linking,
   Modal,
+  ActivityIndicator,
 } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   Play,
@@ -30,6 +32,8 @@ import {
   Eye,
   EyeOff,
   ChevronRight,
+  Camera,
+  CameraOff,
 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 
@@ -40,6 +44,7 @@ import { useWorkoutSessionStore, CompletedWorkoutSummary } from '../../stores/wo
 import { useAuthStore } from '../../stores/authStore';
 import { useGamificationStore } from '../../stores/gamificationStore';
 import { WorkoutService } from '../../services/api/workoutService';
+import { PoseService } from '../../services/api/poseService';
 import { useWorkoutEngine } from './hooks/useWorkoutEngine';
 import { MockSkeletonOverlay } from './components/MockSkeletonOverlay';
 import { FormScoreGauge } from './components/FormScoreGauge';
@@ -52,8 +57,10 @@ interface MirrorScreenProps {
 }
 
 export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
+  const isFocused = useIsFocused();
   const {
     currentExercise,
+    targetExercises,
     status,
     repCount,
     formScore,
@@ -63,6 +70,7 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
     completedSummary,
     activeSessionId,
     setActiveSessionId,
+    setExercise,
     setStatus,
     resetSession,
   } = useWorkoutSessionStore();
@@ -74,8 +82,6 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
 
   const {
     triggerRep,
-    toggleAutoReps,
-    isAutoRepsEnabled,
     togglePersonDetected,
     pause,
     resume,
@@ -84,9 +90,23 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
 
   // Camera permissions hook from Expo SDK 57
   const [permission, requestPermission] = useCameraPermissions();
-  const [simulatedCameraFallback, setSimulatedCameraFallback] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [isPoseAvailable, setIsPoseAvailable] = useState(true);
   const [showStopModal, setShowStopModal] = useState(false);
   const [hasAwardedGains, setHasAwardedGains] = useState(false);
+
+  // Proactively request camera permission when focused if not determined yet
+  useEffect(() => {
+    if (isFocused && permission && !permission.granted && permission.canAskAgain) {
+      requestPermission().catch(() => {});
+    }
+  }, [isFocused, permission?.granted]);
+
+  useEffect(() => {
+    if (permission?.granted) {
+      setCameraReady(true);
+    }
+  }, [permission?.granted]);
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(1)).current;
@@ -118,7 +138,6 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
     if (status === 'active') {
       feedbackSlideAnim.setValue(12);
       feedbackFadeAnim.setValue(0);
-
       Animated.parallel([
         Animated.timing(feedbackSlideAnim, {
           toValue: 0,
@@ -163,28 +182,39 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
       }
     }).catch(() => {});
 
-    if (permission?.granted || simulatedCameraFallback) {
+    if (permission?.granted) {
+      setCameraReady(true);
       transitionToState('active');
       return;
     }
 
-    const result = await requestPermission();
-    if (result.granted) {
-      transitionToState('active');
-    } else {
-      // Permission not granted; prompt user
+    try {
+      const result = await requestPermission();
+      if (result.granted) {
+        setCameraReady(true);
+        transitionToState('active');
+      }
+    } catch (err) {
+      console.warn('Permission request error:', err);
     }
   };
 
   // Handle Workout Complete (State 3 entry)
   const handleFinishWorkout = () => {
     setShowStopModal(false);
+    // finishEarly completes the session and automatically submits to backend API
     const summary = finishEarly();
     if (!hasAwardedGains) {
-      addReward(summary.xpEarned, summary.coinsEarned);
       setHasAwardedGains(true);
-      // Persist workout session to backend & Supabase with activeSessionId
-      WorkoutService.submitSession(summary, activeSessionId);
+      // Persist AI pose tracking session metrics without duplicate session complete POST
+      PoseService.saveSession({
+        exercise: summary.exerciseType || 'squat',
+        reps: summary.totalReps,
+        duration_seconds: summary.durationSeconds,
+        average_form_score: summary.averageFormScore,
+        common_mistakes: summary.commonMistakes,
+        feedback: summary.feedback,
+      }).catch(() => {});
     }
     transitionToState('complete');
   };
@@ -217,33 +247,49 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
   // STATE 2: DURING (Live AI Workout Mirror)
   // =========================================================================
   if (status === 'active' || status === 'paused') {
-    const isCameraReady = permission?.granted && !simulatedCameraFallback;
-
     return (
-      <Animated.View style={[styles.duringContainer, { opacity: fadeAnim }]}>
-        {/* Full-screen Camera Background Layer */}
-        {isCameraReady ? (
+      <View style={styles.duringContainer}>
+        {/* Full-screen Camera Background Layer (Unmounted when unfocused to release native camera) */}
+        {isFocused && permission?.granted ? (
           <CameraView
             style={StyleSheet.absoluteFill}
             facing="front"
-            mirror
+            mirror={true}
+            onCameraReady={() => setCameraReady(true)}
+            onMountError={(error) => {
+              console.warn('CameraView mount error:', error);
+            }}
           />
         ) : (
-          <View style={[StyleSheet.absoluteFill, styles.simulatedCameraBackground]}>
-            {/* Ambient Biomechanical Grid lines */}
-            <View style={styles.gridLineHorizontal} />
-            <View style={[styles.gridLineHorizontal, { top: '35%' }]} />
-            <View style={[styles.gridLineHorizontal, { top: '65%' }]} />
-            <View style={styles.gridLineVertical} />
-            <View style={[styles.gridLineVertical, { left: '30%' }]} />
-            <View style={[styles.gridLineVertical, { left: '70%' }]} />
+          <View style={[StyleSheet.absoluteFill, styles.cameraPlaceholderBackground]}>
+            <View style={styles.cameraPlaceholderContent}>
+              <AlertTriangle size={32} color={Colors.warning} />
+              <Text style={styles.cameraPlaceholderTitle}>
+                {!permission?.granted ? 'Camera Permission Required' : 'Initializing Camera Mirror...'}
+              </Text>
+              {!permission?.granted && (
+                <TouchableOpacity
+                  style={styles.requestPermissionBtn}
+                  onPress={requestPermission}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.requestPermissionBtnText}>Grant Camera Access</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         )}
+
+        {/* Dynamic Biomechanical & Workout HUD Overlays */}
+        <Animated.View style={[StyleSheet.absoluteFill, { opacity: fadeAnim }]} pointerEvents="box-none">
 
         {/* Biomechanical Skeleton Overlay */}
         <MockSkeletonOverlay
           isPersonDetected={isPersonDetected}
+          isPoseAvailable={isPoseAvailable}
           repCount={repCount}
+          exerciseType={currentExercise.typeKey}
+          formScore={formScore}
         />
 
         {/* Top Overlay Bar */}
@@ -313,35 +359,36 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
             <FormScoreGauge score={formScore} size={84} strokeWidth={7} />
           </View>
 
-          {/* Subtle Dev Action Toolbar (For Instant Demoing) */}
+          {/* Action Toolbar: Manual Rep Logging & Real-time Vision Status */}
           <View style={styles.devBar}>
             <TouchableOpacity
               activeOpacity={0.7}
               onPress={triggerRep}
-              style={styles.devChip}
+              style={[styles.devChip, { backgroundColor: Colors.primary }]}
             >
-              <Dumbbell size={12} color="#FFFFFF" />
-              <Text style={styles.devChipText}>+ Rep</Text>
+              <Dumbbell size={13} color="#FFFFFF" />
+              <Text style={[styles.devChipText, { color: '#FFFFFF', fontWeight: '800' }]}>+ Log Rep</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              activeOpacity={0.7}
-              onPress={toggleAutoReps}
+            <View
               style={[
                 styles.devChip,
-                isAutoRepsEnabled && { borderColor: Colors.primary, backgroundColor: 'rgba(79, 124, 255, 0.2)' },
+                {
+                  borderColor: isPersonDetected ? Colors.success : Colors.warning,
+                  backgroundColor: isPersonDetected ? 'rgba(34, 255, 176, 0.15)' : 'rgba(255, 176, 32, 0.15)',
+                },
               ]}
             >
-              <RefreshCw size={12} color={isAutoRepsEnabled ? Colors.primary : Colors.textMuted} />
+              <Sparkles size={12} color={isPersonDetected ? Colors.success : Colors.warning} />
               <Text
                 style={[
                   styles.devChipText,
-                  isAutoRepsEnabled && { color: Colors.primary },
+                  { color: isPersonDetected ? Colors.success : Colors.warning },
                 ]}
               >
-                Auto: {isAutoRepsEnabled ? 'ON' : 'OFF'}
+                {isPersonDetected ? `${currentExercise.name.replace('AI ', '')} Active` : 'Searching Athlete'}
               </Text>
-            </TouchableOpacity>
+            </View>
 
             <TouchableOpacity
               activeOpacity={0.7}
@@ -362,7 +409,7 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
                   !isPersonDetected && { color: Colors.warning },
                 ]}
               >
-                {isPersonDetected ? 'Visible' : 'No Athlete'}
+                {isPersonDetected ? 'In Frame' : 'Out of Frame'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -444,7 +491,8 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
             </GlassCard>
           </View>
         </Modal>
-      </Animated.View>
+        </Animated.View>
+      </View>
     );
   }
 
@@ -532,24 +580,44 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
             </View>
           </View>
 
-          {/* Improvement Suggestions Card */}
+          {/* Common Mistakes Detected */}
+          {completedSummary.commonMistakes && completedSummary.commonMistakes.length > 0 && (
+            <GlassCard style={[styles.suggestionsCard, { borderColor: Colors.warning }]} padding={18}>
+              <View style={styles.suggestionsTitleRow}>
+                <AlertTriangle size={18} color={Colors.warning} />
+                <Text style={[styles.suggestionsTitle, { color: Colors.warning }]}>Form Diagnostics & Mistakes</Text>
+              </View>
+              {completedSummary.commonMistakes.map((mistake, idx) => (
+                <View key={idx} style={styles.suggestionItem}>
+                  <View style={[styles.suggestionDot, { backgroundColor: Colors.warning }]} />
+                  <Text style={[styles.suggestionText, { color: colors.textPrimary, fontWeight: '600' }]}>
+                    {mistake}
+                  </Text>
+                </View>
+              ))}
+            </GlassCard>
+          )}
+
+          {/* AI Coaching Directives */}
           <GlassCard style={styles.suggestionsCard} padding={18}>
             <View style={styles.suggestionsTitleRow}>
               <ShieldCheck size={18} color={colors.primaryViolet} />
-              <Text style={[styles.suggestionsTitle, { color: colors.textPrimary }]}>Biomechanic Insights</Text>
+              <Text style={[styles.suggestionsTitle, { color: colors.textPrimary }]}>AI Coaching Directives</Text>
             </View>
-            <View style={styles.suggestionItem}>
-              <View style={[styles.suggestionDot, { backgroundColor: colors.primaryViolet }]} />
-              <Text style={[styles.suggestionText, { color: colors.textSecondary }]}>
-                Maintain an upright cervical spine during maximum hip flexion to reduce lower back shearing by ~14%.
-              </Text>
-            </View>
-            <View style={styles.suggestionItem}>
-              <View style={[styles.suggestionDot, { backgroundColor: colors.primaryViolet }]} />
-              <Text style={[styles.suggestionText, { color: colors.textSecondary }]}>
-                Great depth consistency! Keep pressing out against the floor through mid-foot drive on each rep.
-              </Text>
-            </View>
+            {(completedSummary.feedback && completedSummary.feedback.length > 0
+              ? completedSummary.feedback
+              : [
+                  'Maintain an upright cervical spine during maximum hip flexion to reduce lower back shearing.',
+                  'Great depth consistency! Keep pressing out against the floor through mid-foot drive.',
+                ]
+            ).map((cue, idx) => (
+              <View key={idx} style={styles.suggestionItem}>
+                <View style={[styles.suggestionDot, { backgroundColor: colors.primaryViolet }]} />
+                <Text style={[styles.suggestionText, { color: colors.textSecondary }]}>
+                  {cue}
+                </Text>
+              </View>
+            ))}
           </GlassCard>
 
           {/* Back to Home CTA */}
@@ -570,7 +638,7 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
   // =========================================================================
   // STATE 1: BEFORE (Exercise Preview & Calibration)
   // =========================================================================
-  const isPermissionDenied = permission && !permission.granted && !simulatedCameraFallback;
+  const isPermissionDenied = permission && !permission.granted;
 
   return (
     <ScreenContainer>
@@ -586,6 +654,110 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
             <Text style={[styles.screenSub, { color: colors.textSecondary }]}>
             Align your full body in the front camera for automated repetition counting and joint form diagnostics.
           </Text>
+        </View>
+
+        {/* Live Mirror Calibration Preview (Visible immediately when permission granted) */}
+        {permission?.granted && isFocused ? (
+          <GlassCard style={styles.liveMirrorCard} padding={12}>
+            <View style={styles.liveMirrorHeader}>
+              <View style={styles.liveIndicator}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveIndicatorText}>LIVE CAMERA MIRROR ACTIVE</Text>
+              </View>
+              <Text style={[styles.calibrationTip, { color: colors.textSecondary }]}>Position yourself 6-8 ft back</Text>
+            </View>
+            <View style={styles.cameraPreviewFrame}>
+              <CameraView
+                style={StyleSheet.absoluteFill}
+                facing="front"
+                mirror={true}
+              />
+              <View style={styles.cameraFrameGuide} pointerEvents="none">
+                <View style={styles.frameCornerTL} />
+                <View style={styles.frameCornerTR} />
+                <View style={styles.frameCornerBL} />
+                <View style={styles.frameCornerBR} />
+              </View>
+            </View>
+          </GlassCard>
+        ) : (
+          <GlassCard style={styles.permissionPromptCard} padding={16}>
+            <View style={styles.permissionRow}>
+              <Camera size={22} color={colors.primary} />
+              <View style={styles.permissionCol}>
+                <Text style={[styles.permissionTitle, { color: colors.textPrimary }]}>Camera Access Required</Text>
+                <Text style={[styles.permissionDesc, { color: colors.textSecondary }]}>
+                  Enable camera preview to view yourself in the AI Mirror and track real-time reps.
+                </Text>
+              </View>
+            </View>
+            <View style={styles.permissionActions}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => requestPermission()}
+                style={[styles.primaryGrantBtn, { backgroundColor: colors.primary }]}
+              >
+                <Text style={styles.primaryGrantBtnText}>Enable Camera Preview</Text>
+              </TouchableOpacity>
+              {permission && !permission.granted && !permission.canAskAgain && (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => Linking.openSettings()}
+                  style={styles.settingsBtn}
+                >
+                  <Text style={styles.settingsBtnText}>Open Settings</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </GlassCard>
+        )}
+
+        {/* 5 Target Movements Quick Selector */}
+        <View style={styles.exerciseSelectorRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.exerciseSelectorScroll}
+          >
+            {targetExercises.map((ex) => {
+              const isSelected = ex.id === currentExercise.id;
+              return (
+                <TouchableOpacity
+                  key={ex.id}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    try {
+                      Haptics.selectionAsync();
+                    } catch {}
+                    setExercise(ex);
+                  }}
+                  style={[
+                    styles.exercisePill,
+                    {
+                      backgroundColor: isSelected
+                        ? colors.primary
+                        : isDark
+                        ? 'rgba(255, 255, 255, 0.08)'
+                        : 'rgba(0, 0, 0, 0.05)',
+                      borderColor: isSelected ? colors.primary : colors.border,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.exercisePillText,
+                      {
+                        color: isSelected ? '#FFFFFF' : colors.textPrimary,
+                        fontWeight: isSelected ? '800' : '600',
+                      },
+                    ]}
+                  >
+                    {ex.name.replace('AI ', '')}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         </View>
 
         {/* Hero Exercise Area */}
@@ -670,38 +842,6 @@ export const MirrorScreen: React.FC<MirrorScreenProps> = ({ navigation }) => {
             </View>
           ))}
         </GlassCard>
-
-        {/* Camera Permission Alert (if denied) */}
-        {isPermissionDenied && (
-          <GlassCard style={styles.permissionCard} padding={16}>
-            <View style={styles.permissionRow}>
-              <Settings size={20} color={Colors.warning} />
-              <View style={styles.permissionCol}>
-                <Text style={styles.permissionTitle}>Camera Permission Required</Text>
-                <Text style={styles.permissionDesc}>
-                  Enable camera access to allow the local vision pipeline to track joint keypoints.
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.permissionActions}>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => Linking.openSettings()}
-                style={styles.settingsBtn}
-              >
-                <Text style={styles.settingsBtnText}>Open Settings</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => setSimulatedCameraFallback(true)}
-                style={styles.fallbackBtn}
-              >
-                <Text style={styles.fallbackBtnText}>Use Simulated Vision</Text>
-              </TouchableOpacity>
-            </View>
-          </GlassCard>
-        )}
 
         {/* Start Workout Primary CTA */}
         <View style={styles.startActionBox}>
@@ -907,18 +1047,112 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.warning,
   },
-  fallbackBtn: {
+  liveMirrorCard: {
+    gap: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(79, 124, 255, 0.3)',
+    overflow: 'hidden',
+  },
+  liveMirrorHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  liveIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: Colors.neonGreen,
+  },
+  liveIndicatorText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: Colors.neonGreen,
+    letterSpacing: 0.5,
+  },
+  calibrationTip: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  cameraPreviewFrame: {
+    width: '100%',
+    height: 180,
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: '#0F172A',
+    position: 'relative',
+    marginTop: 4,
+  },
+  cameraFrameGuide: {
+    ...StyleSheet.absoluteFill,
+    padding: 12,
+  },
+  frameCornerTL: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    width: 18,
+    height: 18,
+    borderTopWidth: 2.5,
+    borderLeftWidth: 2.5,
+    borderColor: Colors.neonGreen,
+    borderRadius: 3,
+  },
+  frameCornerTR: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 18,
+    height: 18,
+    borderTopWidth: 2.5,
+    borderRightWidth: 2.5,
+    borderColor: Colors.neonGreen,
+    borderRadius: 3,
+  },
+  frameCornerBL: {
+    position: 'absolute',
+    bottom: 10,
+    left: 10,
+    width: 18,
+    height: 18,
+    borderBottomWidth: 2.5,
+    borderLeftWidth: 2.5,
+    borderColor: Colors.neonGreen,
+    borderRadius: 3,
+  },
+  frameCornerBR: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    width: 18,
+    height: 18,
+    borderBottomWidth: 2.5,
+    borderRightWidth: 2.5,
+    borderColor: Colors.neonGreen,
+    borderRadius: 3,
+  },
+  permissionPromptCard: {
+    gap: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(79, 124, 255, 0.25)',
+  },
+  primaryGrantBtn: {
     flex: 1,
     paddingVertical: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fallbackBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: theme.colors.textPrimary,
+  primaryGrantBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   startActionBox: {
     marginTop: 8,
@@ -927,27 +1161,34 @@ const styles = StyleSheet.create({
   // ================= STATE 2 STYLES =================
   duringContainer: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: '#000000',
   },
-  simulatedCameraBackground: {
+  cameraPlaceholderBackground: {
     backgroundColor: '#090B10',
-    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  gridLineHorizontal: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: '50%',
-    height: 1,
-    backgroundColor: 'rgba(79, 124, 255, 0.08)',
+  cameraPlaceholderContent: {
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 24,
   },
-  gridLineVertical: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: '50%',
-    width: 1,
-    backgroundColor: 'rgba(79, 124, 255, 0.08)',
+  cameraPlaceholderTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  requestPermissionBtn: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  requestPermissionBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   topOverlayBar: {
     position: 'absolute',
@@ -1339,5 +1580,22 @@ const styles = StyleSheet.create({
   },
   afterAction: {
     marginTop: 6,
+  },
+  exerciseSelectorRow: {
+    marginBottom: 16,
+  },
+  exerciseSelectorScroll: {
+    gap: 8,
+    paddingHorizontal: 2,
+  },
+  exercisePill: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  exercisePillText: {
+    fontSize: 13,
+    letterSpacing: 0.3,
   },
 });

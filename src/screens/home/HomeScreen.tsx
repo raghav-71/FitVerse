@@ -25,6 +25,14 @@ import {
   Info,
   Sun,
   Moon,
+  Utensils,
+  TrendingUp,
+  CheckCircle2,
+  Calendar,
+  Zap,
+  Award,
+  Target,
+  Plus,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
@@ -38,9 +46,10 @@ import {
   Avatar,
 } from '../../components/ui';
 import { Colors } from '../../theme/colors';
-import { useAuthStore } from '../../stores/authStore';
+import { useAuthStore, normalizeGoalName } from '../../stores/authStore';
 import { useGamificationStore } from '../../stores/gamificationStore';
 import { useDailyActivityStore } from '../../stores/dailyActivityStore';
+import { useDietStore } from '../../stores/dietStore';
 import { useHomeDashboard } from '../../services/mock/hooks/useHomeDashboard';
 
 import { ExerciseTrackerModal } from './components/ExerciseTrackerModal';
@@ -64,32 +73,113 @@ export const HomeScreen: React.FC = () => {
 
   // Stores
   const user = useAuthStore((state) => state.user);
+  const selectedGoal = useAuthStore((state) => state.selectedGoal);
+  const normalizedGoal = normalizeGoalName(selectedGoal || (user as any)?.selected_goal);
   const isNewUser = useAuthStore((state) => state.isNewUser);
   const xp = useGamificationStore((state) => state.xp);
   const userLevel = useGamificationStore((state) => state.level);
   const streak = useGamificationStore((state) => state.streak);
 
+  // Daily Activity Store
   const exerciseLogged = useDailyActivityStore((state) => state.exerciseLogged);
   const loggedActivities = useDailyActivityStore((state) => state.loggedActivities);
+  const hasWorkedOutToday = useDailyActivityStore((state) => state.hasWorkedOutToday);
+  const todayWorkoutDurationMinutes = useDailyActivityStore((state) => state.todayWorkoutDurationMinutes);
+  const todayWorkoutCaloriesBurned = useDailyActivityStore((state) => state.todayWorkoutCaloriesBurned);
+  const totalPastWorkouts = useDailyActivityStore((state) => state.totalPastWorkouts);
   const waterCount = useDailyActivityStore((state) => state.waterGlasses);
   const maxGlasses = useDailyActivityStore((state) => state.maxGlasses);
+  const todayWaterMl = useDailyActivityStore((state) => state.todayWaterMl);
+  const dailyWaterTargetMl = useDailyActivityStore((state) => state.dailyWaterTargetMl || 3500);
+  const addWaterGlass = useDailyActivityStore((state) => state.addWaterGlass);
   const currentWeight = useDailyActivityStore((state) => state.currentWeight);
   const weightLoggedToday = useDailyActivityStore((state) => state.weightLoggedToday);
+  const fitScoreData = useDailyActivityStore((state) => state.fitScoreData);
+  const steps = useDailyActivityStore((state) => state.steps || 0);
+  const stepsTarget = useDailyActivityStore((state) => state.stepsTarget || 10000);
   const syncWithBackend = useDailyActivityStore((state) => state.syncWithBackend);
+
+  // Diet Store
+  const meals = useDietStore((state) => state.meals);
+  const calorieTarget = useDietStore((state) => state.calorieTarget || 2200);
+  const proteinTarget = useDietStore((state) => state.proteinTarget || 140);
+  const getTotals = useDietStore((state) => state.getTotals);
+  const dailyAnalysis = useDietStore((state) => state.dailyAnalysis);
+  const weeklyReport = useDietStore((state) => state.weeklyReport);
+  const syncDietWithBackend = useDietStore((state) => state.syncTodayWithBackend);
 
   useEffect(() => {
     syncWithBackend();
-  }, [syncWithBackend]);
+    syncDietWithBackend();
+  }, [syncWithBackend, syncDietWithBackend]);
 
+  const totals = getTotals();
+  const hasMealsLogged = meals.length > 0 && totals.calories > 0;
+  const currentFitScore = fitScoreData?.fit_score ?? (hasWorkedOutToday || hasMealsLogged ? 78 : 70);
 
   // Language & Theme hooks
   const { t, num } = useTranslation();
   const { colors, isDark, toggleThemeMode } = useTheme();
 
-  // Dynamic Personalized Greeting: "Welcome, {name}" for new users, "Welcome back, {name}" for returning
-  const isFirstTime = isNewUser || (streak === 0 && xp === 0 && !exerciseLogged);
+  // 1. Time-based User Greeting (Requirement 1)
+  const getTimeGreeting = (): string => {
+    const hour = new Date().getHours();
+    if (hour >= 5 && hour < 12) return 'Good Morning';
+    if (hour >= 12 && hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  };
   const userName = user?.name || 'Athlete';
-  const greetingText = isFirstTime ? `${t('welcome')}, ${userName}` : `${t('welcomeBack')}, ${userName}`;
+  const greetingText = `${getTimeGreeting()}, ${userName}`;
+
+  // 8. Daily AI Insight (Requirement 8)
+  const getDailyAiInsight = (): string => {
+    if (dailyAnalysis?.headline) return dailyAnalysis.headline;
+    if (dailyAnalysis?.tomorrow_recommendations && dailyAnalysis.tomorrow_recommendations.length > 0) {
+      return dailyAnalysis.tomorrow_recommendations[0];
+    }
+    const proteinNeeded = Math.max(0, proteinTarget - totals.protein);
+    const waterCurrentL = (todayWaterMl / 1000).toFixed(1);
+    const waterTargetL = (dailyWaterTargetMl / 1000).toFixed(1);
+
+    if (todayWaterMl >= dailyWaterTargetMl * 0.4 && proteinNeeded > 0) {
+      return `Your hydration is good today. You need approximately ${proteinNeeded}g more protein to reach your target.`;
+    }
+    if (!hasMealsLogged && todayWaterMl === 0) {
+      return 'Log your first meal and glass of water today to unlock your personalized AI daily coaching insights.';
+    }
+    if (totals.protein >= proteinTarget) {
+      return `Phenomenal discipline! You've achieved 100% of your daily protein target with ${totals.protein}g.`;
+    }
+    return `Tracking at ${totals.calories} kcal so far today. Remember to stay hydrated and hit your target macros.`;
+  };
+
+  // 9. Weekly Preview Validation (Requirement 9)
+  const hasWeeklyData = Boolean(
+    weeklyReport &&
+    weeklyReport.has_data !== false &&
+    ((weeklyReport.workout?.workout_days ?? 0) > 0 || (weeklyReport.nutrition?.average_protein ?? 0) > 0)
+  );
+
+  // 7. Quick Actions Handlers (Requirement 7)
+  const handleQuickLogFood = () => {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowPlanModal(true);
+  };
+
+  const handleQuickAddWater = () => {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    addWaterGlass();
+  };
+
+  const handleQuickStartWorkout = () => {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    navigation.navigate('Mirror');
+  };
+
+  const handleQuickAiCoach = () => {
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    navigation.navigate('InjuryCoach');
+  };
 
   // TanStack Query Mock Hook
   const { data: dashboard, refetch, isRefetching } = useHomeDashboard();
@@ -227,6 +317,9 @@ export const HomeScreen: React.FC = () => {
           {/* ============================================================ */}
           {/* 1. HEADER CARD (Deep Forest Green from Screenshot 2)         */}
           {/* ============================================================ */}
+          {/* ============================================================ */}
+          {/* 1. HEADER CARD (Deep Forest Green with Live User & Goal)      */}
+          {/* ============================================================ */}
           <View style={styles.headerCard}>
             {/* Top User Row */}
             <View style={styles.headerTopRow}>
@@ -239,9 +332,13 @@ export const HomeScreen: React.FC = () => {
                     <View style={styles.proBadge}>
                       <Text style={styles.proBadgeText}>PRO</Text>
                     </View>
+                    <View style={styles.goalBadge}>
+                      <Target size={10} color="#162E1C" />
+                      <Text style={styles.goalBadgeText}>{normalizedGoal.toUpperCase()}</Text>
+                    </View>
                   </View>
                   <Text style={styles.programSubtitle} numberOfLines={1}>
-                    {t('dayProgramSubtitle') || 'Day 11 · 6-Month Full Body Transformation with Coach...'}
+                    {`Goal: ${normalizedGoal} · ${hasWorkedOutToday ? 'Workout Completed Today' : (totalPastWorkouts === 0 ? 'Ready for First Session' : "Ready for Today's Workout")}`}
                   </Text>
                 </View>
               </View>
@@ -263,26 +360,27 @@ export const HomeScreen: React.FC = () => {
                   <Text style={styles.seeDay90Label}>{isDark ? 'Light' : 'Dark'}</Text>
                 </TouchableOpacity>
 
-                {/* See Day 90 circular badge */}
-                <TouchableOpacity style={styles.seeDay90Circle} activeOpacity={0.8}>
-                  <Sparkles size={16} color="#F0BF38" />
-                  <Text style={styles.seeDay90Label}>{t('seeDay90') || 'See Day 90'}</Text>
-                </TouchableOpacity>
+                {/* Streak and Fit Score Badges */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={styles.fitScoreBadge}>
+                    <ShieldCheck size={12} color="#22FFB0" />
+                    <Text style={styles.fitScoreText}>{num(currentFitScore)} FIT</Text>
+                  </View>
 
-                {/* Streak Badge (Dark pill with gold flame & border) */}
-                <View style={styles.streakBadge}>
-                  <Text style={styles.streakFlame}>🔥</Text>
-                  <Text style={styles.streakText}>{num(streak || 22)} {t('daysUnit') || 'days'}</Text>
+                  <View style={styles.streakBadge}>
+                    <Text style={styles.streakFlame}>🔥</Text>
+                    <Text style={styles.streakText}>{num(streak)} {t('daysUnit') || 'days'}</Text>
+                  </View>
                 </View>
               </View>
             </View>
 
-            {/* Week Tracker Row (Screenshot 2 style) */}
+            {/* Week Tracker Row */}
             <View style={styles.weekTrackerContainer}>
               <View style={styles.weekCirclesRow}>
                 {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((dayChar, idx) => {
-                  const isCompleted = idx < 5;
-                  const isToday = idx === 5;
+                  const isCompleted = idx < (weeklyReport?.workout?.workout_days ?? (hasWorkedOutToday ? 1 : 0));
+                  const isToday = idx === ((new Date().getDay() + 6) % 7);
 
                   return (
                     <View key={idx} style={styles.dayCircleWrap}>
@@ -313,34 +411,269 @@ export const HomeScreen: React.FC = () => {
           </View>
 
           {/* ============================================================ */}
-          {/* 2. TONIGHT'S PREP CARD (Warm Golden-Cream from Screenshot 2) */}
+          {/* 2. TODAY'S FIT SCORE (0 - 100 with 6 Dimensions Breakdown)   */}
+          {/* ============================================================ */}
+          <GlassCard style={[styles.fitScoreCard, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
+            <View style={styles.fitScoreHeaderRow}>
+              <View>
+                <Text style={[styles.cardSectionTag, { color: colors.textSecondary }]}>TODAY'S FIT SCORE</Text>
+                <View style={styles.scoreNumberRow}>
+                  <Text style={[styles.bigFitScoreNumber, { color: colors.primary }]}>{num(currentFitScore)}</Text>
+                  <Text style={[styles.scoreOutOf, { color: colors.textMuted }]}>/ 100</Text>
+                </View>
+              </View>
+              <View style={[styles.scoreQualityPill, {
+                backgroundColor: currentFitScore >= 80 ? 'rgba(34, 255, 176, 0.15)' : currentFitScore >= 60 ? 'rgba(240, 191, 56, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                borderColor: currentFitScore >= 80 ? colors.success : currentFitScore >= 60 ? '#F0BF38' : colors.danger
+              }]}>
+                <ShieldCheck size={14} color={currentFitScore >= 80 ? colors.success : currentFitScore >= 60 ? '#F0BF38' : colors.danger} />
+                <Text style={[styles.scoreQualityText, { color: currentFitScore >= 80 ? colors.success : currentFitScore >= 60 ? '#F0BF38' : colors.danger }]}>
+                  {currentFitScore >= 80 ? 'OPTIMAL' : currentFitScore >= 60 ? 'ON TRACK' : 'NEEDS FOCUS'}
+                </Text>
+              </View>
+            </View>
+
+            {/* 6 Dimensions Breakdown Chips */}
+            <View style={styles.dimensionsGrid}>
+              {[
+                { label: 'Nutrition', val: fitScoreData?.nutrition_score ?? (hasMealsLogged ? 82 : 70), icon: '🥗' },
+                { label: 'Workout', val: fitScoreData?.workout_score ?? (hasWorkedOutToday ? 95 : 60), icon: '🏋️' },
+                { label: 'Water', val: fitScoreData?.hydration_score ?? (todayWaterMl > 0 ? 80 : 50), icon: '💧' },
+                { label: 'Activity', val: fitScoreData?.activity_score ?? 75, icon: '🏃' },
+                { label: 'Sleep', val: fitScoreData?.sleep_score ?? 75, icon: '🌙' },
+                { label: 'Stress', val: fitScoreData?.stress_score ?? 75, icon: '🧘' },
+              ].map((dim, idx) => (
+                <View key={idx} style={[styles.dimensionChip, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.03)' }]}>
+                  <Text style={styles.dimensionIcon}>{dim.icon}</Text>
+                  <Text style={[styles.dimensionLabel, { color: colors.textSecondary }]}>{dim.label}</Text>
+                  <Text style={[styles.dimensionVal, { color: colors.textPrimary }]}>{num(dim.val)}</Text>
+                </View>
+              ))}
+            </View>
+          </GlassCard>
+
+          {/* ============================================================ */}
+          {/* 3. CORE METRICS & WORKOUT STATUS (Calories, Protein, Water, Workout) */}
+          {/* ============================================================ */}
+          <View style={styles.coreMetricsGrid}>
+            {/* Calories (Requirement 3) */}
+            <GlassCard style={[styles.metricCard, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
+              <View style={styles.metricCardHeader}>
+                <Flame size={18} color="#EA580C" />
+                <Text style={[styles.metricCardTitle, { color: colors.textSecondary }]}>CALORIES</Text>
+              </View>
+              <Text style={[styles.metricCardPrimary, { color: colors.textPrimary }]}>
+                {hasMealsLogged
+                  ? `${num(totals.calories)} / ${num(calorieTarget)}`
+                  : 'No meals logged yet'}
+              </Text>
+              <Text style={[styles.metricCardSub, { color: colors.textMuted }]}>
+                {hasMealsLogged ? 'kcal consumed today' : 'Tap Log Food below'}
+              </Text>
+            </GlassCard>
+
+            {/* Protein (Requirement 4) */}
+            <GlassCard style={[styles.metricCard, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
+              <View style={styles.metricCardHeader}>
+                <Zap size={18} color={colors.primary} />
+                <Text style={[styles.metricCardTitle, { color: colors.textSecondary }]}>PROTEIN</Text>
+              </View>
+              <Text style={[styles.metricCardPrimary, { color: colors.textPrimary }]}>
+                {num(totals.protein)} / {num(proteinTarget)}g
+              </Text>
+              <Text style={[styles.metricCardSub, { color: colors.textMuted }]}>
+                {Math.round((totals.protein / (proteinTarget || 1)) * 100)}% of daily target
+              </Text>
+            </GlassCard>
+
+            {/* Water (Requirement 5) */}
+            <GlassCard style={[styles.metricCard, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
+              <View style={styles.metricCardHeader}>
+                <Droplets size={18} color="#38BDF8" />
+                <Text style={[styles.metricCardTitle, { color: colors.textSecondary }]}>WATER</Text>
+              </View>
+              <Text style={[styles.metricCardPrimary, { color: colors.textPrimary }]}>
+                {num((todayWaterMl / 1000).toFixed(1))} / {num((dailyWaterTargetMl / 1000).toFixed(1))}L
+              </Text>
+              <Text style={[styles.metricCardSub, { color: colors.textMuted }]}>
+                {waterCount} glasses logged
+              </Text>
+            </GlassCard>
+
+            {/* Workout Status (Requirement 6) */}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleQuickStartWorkout}
+              style={{ flex: 1 }}
+            >
+              <GlassCard style={[styles.metricCard, { backgroundColor: colors.cardBackground, borderColor: hasWorkedOutToday ? colors.success : colors.border }]}>
+                <View style={styles.metricCardHeader}>
+                  <Dumbbell size={18} color={hasWorkedOutToday ? colors.success : colors.primary} />
+                  <Text style={[styles.metricCardTitle, { color: colors.textSecondary }]}>WORKOUT</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  {hasWorkedOutToday && <CheckCircle2 size={16} color={colors.success} />}
+                  <Text style={[styles.metricCardPrimary, { color: hasWorkedOutToday ? colors.success : colors.textPrimary }]}>
+                    {hasWorkedOutToday
+                      ? 'Completed'
+                      : totalPastWorkouts === 0
+                      ? 'Start your first workout'
+                      : "Start Today's Workout"}
+                  </Text>
+                </View>
+                <Text style={[styles.metricCardSub, { color: colors.textMuted }]}>
+                  {hasWorkedOutToday
+                    ? `${todayWorkoutDurationMinutes > 0 ? todayWorkoutDurationMinutes : 25} min · ${todayWorkoutCaloriesBurned > 0 ? todayWorkoutCaloriesBurned : 180} kcal`
+                    : 'AI Mirror guidance →'}
+                </Text>
+              </GlassCard>
+            </TouchableOpacity>
+          </View>
+
+          {/* ============================================================ */}
+          {/* 7. QUICK ACTIONS ROW (Requirement 7)                          */}
+          {/* ============================================================ */}
+          <View style={styles.quickActionsSection}>
+            <Text style={[styles.sectionTitle, { color: colors.textSecondary, marginBottom: 8 }]}>QUICK ACTIONS</Text>
+            <View style={styles.quickActionsRow}>
+              {/* Log Food */}
+              <TouchableOpacity
+                style={[styles.quickActionBtn, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}
+                activeOpacity={0.8}
+                onPress={handleQuickLogFood}
+              >
+                <View style={[styles.quickActionIconWrap, { backgroundColor: 'rgba(234, 88, 12, 0.12)' }]}>
+                  <Utensils size={20} color="#EA580C" />
+                </View>
+                <Text style={[styles.quickActionLabel, { color: colors.textPrimary }]}>Log Food</Text>
+              </TouchableOpacity>
+
+              {/* Add Water */}
+              <TouchableOpacity
+                style={[styles.quickActionBtn, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}
+                activeOpacity={0.8}
+                onPress={handleQuickAddWater}
+              >
+                <View style={[styles.quickActionIconWrap, { backgroundColor: 'rgba(56, 189, 248, 0.12)' }]}>
+                  <Droplets size={20} color="#38BDF8" />
+                </View>
+                <Text style={[styles.quickActionLabel, { color: colors.textPrimary }]}>Add Water</Text>
+              </TouchableOpacity>
+
+              {/* Start Workout */}
+              <TouchableOpacity
+                style={[styles.quickActionBtn, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}
+                activeOpacity={0.8}
+                onPress={handleQuickStartWorkout}
+              >
+                <View style={[styles.quickActionIconWrap, { backgroundColor: 'rgba(34, 255, 176, 0.12)' }]}>
+                  <Dumbbell size={20} color={colors.primary} />
+                </View>
+                <Text style={[styles.quickActionLabel, { color: colors.textPrimary }]}>Start Workout</Text>
+              </TouchableOpacity>
+
+              {/* AI Coach */}
+              <TouchableOpacity
+                style={[styles.quickActionBtn, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}
+                activeOpacity={0.8}
+                onPress={handleQuickAiCoach}
+              >
+                <View style={[styles.quickActionIconWrap, { backgroundColor: 'rgba(168, 85, 247, 0.12)' }]}>
+                  <Sparkles size={20} color="#A855F7" />
+                </View>
+                <Text style={[styles.quickActionLabel, { color: colors.textPrimary }]}>AI Coach</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* ============================================================ */}
+          {/* 8. DAILY AI INSIGHT CARD (Requirement 8)                      */}
           {/* ============================================================ */}
           <View style={[styles.tonightPrepCard, { backgroundColor: colors.prepCardBg, borderColor: colors.prepCardBorder }]}>
-            <Text style={[styles.prepHeadline, { color: colors.prepCardTitle }]}>{t('tonightPrepTitle')}</Text>
-            <Text style={[styles.prepDescription, { color: colors.prepCardBody }]}>
-              {t('tonightPrepDesc')}
-            </Text>
-
-            {/* Secondary Coach Tip Mini-Card */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Sparkles size={16} color="#7C5315" />
+              <Text style={[styles.prepHeadline, { color: colors.prepCardTitle }]}>DAILY AI INSIGHT</Text>
+            </View>
             <View style={[styles.coachMiniCard, { backgroundColor: colors.coachMiniCardBg }]}>
               <Avatar
-                name="Sneha"
+                name="AI Coach"
                 size="sm"
                 borderColor="#CFE4CE"
               />
-              <Text style={[styles.coachTipText, { color: colors.coachMiniCardText }]} numberOfLines={2}>
-                {t('coachTipText')}
+              <Text style={[styles.coachTipText, { color: colors.coachMiniCardText }]}>
+                {getDailyAiInsight()}
               </Text>
             </View>
 
             <TouchableOpacity
               style={[styles.viewPlanButton, { backgroundColor: colors.primaryForest }]}
-              onPress={() => setShowPlanModal(!showPlanModal)}
+              onPress={() => setShowPlanModal(true)}
               activeOpacity={0.85}
             >
-              <Text style={styles.viewPlanButtonText}>{t('viewPlan')}</Text>
+              <Text style={styles.viewPlanButtonText}>{t('viewPlan') || 'View Nutrition & Health Plan'}</Text>
             </TouchableOpacity>
           </View>
+
+          {/* ============================================================ */}
+          {/* 9. WEEKLY PREVIEW CARD (Requirement 9)                        */}
+          {/* ============================================================ */}
+          <GlassCard style={[styles.weeklyPreviewCard, { backgroundColor: colors.cardBackground, borderColor: colors.border }]}>
+            <View style={styles.sectionHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Calendar size={16} color={colors.primary} />
+                <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>WEEKLY PREVIEW</Text>
+              </View>
+              {hasWeeklyData && (
+                <Badge label="7-DAY REPORT" variant="success" size="sm" />
+              )}
+            </View>
+
+            {hasWeeklyData ? (
+              <View style={styles.weeklyGrid}>
+                {/* Weekly Fit Score */}
+                <View style={[styles.weeklyMetricBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.02)' }]}>
+                  <Text style={[styles.weeklyBoxLabel, { color: colors.textSecondary }]}>Weekly Fit Score</Text>
+                  <Text style={[styles.weeklyBoxValue, { color: colors.primary }]}>{num(weeklyReport?.weekly_score ?? 84)}</Text>
+                  <Text style={[styles.weeklyBoxSub, { color: colors.textMuted }]}>Out of 100</Text>
+                </View>
+
+                {/* Workout Days */}
+                <View style={[styles.weeklyMetricBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.02)' }]}>
+                  <Text style={[styles.weeklyBoxLabel, { color: colors.textSecondary }]}>Workout Days</Text>
+                  <Text style={[styles.weeklyBoxValue, { color: colors.textPrimary }]}>{num(weeklyReport?.workout?.workout_days ?? 0)} days</Text>
+                  <Text style={[styles.weeklyBoxSub, { color: colors.textMuted }]}>This week</Text>
+                </View>
+
+                {/* Average Protein */}
+                <View style={[styles.weeklyMetricBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.02)' }]}>
+                  <Text style={[styles.weeklyBoxLabel, { color: colors.textSecondary }]}>Average Protein</Text>
+                  <Text style={[styles.weeklyBoxValue, { color: colors.textPrimary }]}>{num(weeklyReport?.nutrition?.average_protein ?? 0)}g</Text>
+                  <Text style={[styles.weeklyBoxSub, { color: colors.textMuted }]}>Per active day</Text>
+                </View>
+
+                {/* Average Water */}
+                <View style={[styles.weeklyMetricBox, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.02)' }]}>
+                  <Text style={[styles.weeklyBoxLabel, { color: colors.textSecondary }]}>Average Water</Text>
+                  <Text style={[styles.weeklyBoxValue, { color: colors.textPrimary }]}>
+                    {num(((weeklyReport?.hydration?.daily_average_ml ?? 0) / 1000).toFixed(1))}L
+                  </Text>
+                  <Text style={[styles.weeklyBoxSub, { color: colors.textMuted }]}>Daily hydration</Text>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.weeklyEmptyWrap}>
+                <View style={[styles.weeklyEmptyIconCircle, { backgroundColor: 'rgba(240, 191, 56, 0.12)' }]}>
+                  <Sparkles size={24} color="#F0BF38" />
+                </View>
+                <Text style={[styles.weeklyEmptyTitle, { color: colors.textPrimary }]}>
+                  Start tracking to unlock your weekly insights
+                </Text>
+                <Text style={[styles.weeklyEmptyDesc, { color: colors.textSecondary }]}>
+                  Log meals, water, and workouts to see your full 7-day biomechanical trend analysis.
+                </Text>
+              </View>
+            )}
+          </GlassCard>
 
           {/* Injury Coach Quick Action Banner */}
           <TouchableOpacity
@@ -606,6 +939,21 @@ const styles = StyleSheet.create({
     color: '#162E1C',
     letterSpacing: 0.5,
   },
+  goalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#C5DEC8',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  goalBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#162E1C',
+    letterSpacing: 0.5,
+  },
   programSubtitle: {
     fontSize: 12,
     color: '#B3C7B6', // Light sage
@@ -651,6 +999,56 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#F0BF38',
+  },
+  fitScoreBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(34, 255, 176, 0.12)',
+    borderWidth: 1.2,
+    borderColor: 'rgba(34, 255, 176, 0.4)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 14,
+  },
+  fitScoreText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#22FFB0',
+    letterSpacing: 0.5,
+  },
+  headerKpiRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  headerKpiItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  headerKpiLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#B3C7B6',
+    letterSpacing: 0.5,
+  },
+  headerKpiValue: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  headerKpiDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
   },
 
   // Week Tracker inside Header
@@ -1050,5 +1448,205 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textSecondary,
     lineHeight: 15,
+  },
+
+  // Fit Score Card (0-100 & 6 Dimensions)
+  fitScoreCard: {
+    padding: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 14,
+  },
+  fitScoreHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardSectionTag: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  scoreNumberRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+    marginTop: 2,
+  },
+  bigFitScoreNumber: {
+    fontSize: 34,
+    fontWeight: '900',
+    letterSpacing: -1,
+  },
+  scoreOutOf: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  scoreQualityPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  scoreQualityText: {
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  dimensionsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  dimensionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    flexBasis: '31%',
+    flexGrow: 1,
+  },
+  dimensionIcon: {
+    fontSize: 13,
+  },
+  dimensionLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    flex: 1,
+  },
+  dimensionVal: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+
+  // Core Metrics Grid (Calories, Protein, Water, Workout)
+  coreMetricsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  metricCard: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 4,
+    minHeight: 96,
+    justifyContent: 'center',
+  },
+  metricCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  metricCardTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  metricCardPrimary: {
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  metricCardSub: {
+    fontSize: 10,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+
+  // Quick Actions Section
+  quickActionsSection: {
+    gap: 6,
+  },
+  quickActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  quickActionBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    borderRadius: 16,
+    borderWidth: 1,
+    gap: 6,
+  },
+  quickActionIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickActionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  // Weekly Preview Card
+  weeklyPreviewCard: {
+    padding: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    gap: 12,
+  },
+  weeklyGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  weeklyMetricBox: {
+    flexBasis: '48%',
+    flexGrow: 1,
+    padding: 12,
+    borderRadius: 14,
+    gap: 2,
+  },
+  weeklyBoxLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  weeklyBoxValue: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  weeklyBoxSub: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  weeklyEmptyWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+  },
+  weeklyEmptyIconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weeklyEmptyTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  weeklyEmptyDesc: {
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 16,
+    maxWidth: 260,
   },
 });

@@ -49,6 +49,7 @@ class WorkoutTelemetryInput(BaseModel):
     knee_angle: Optional[float] = Field(default=95.0, description="Knee flexion angle in degrees")
     hip_angle: Optional[float] = Field(default=85.0, description="Hip flexion angle in degrees")
     back_angle: Optional[float] = Field(default=75.0, description="Torso inclination relative to vertical")
+    elbow_angle: Optional[float] = Field(default=90.0, description="Elbow flexion angle in degrees")
     current_rep: int = Field(default=1, ge=0)
     rep_phase: Optional[str] = Field(default="concentric", description="'eccentric' | 'bottom' | 'concentric' | 'lockout'")
 
@@ -104,6 +105,9 @@ class WorkoutExerciseResponse(BaseModel):
 class WorkoutCompleteInput(BaseModel):
     session_id: Optional[str] = None
     workout_name: str = Field(..., example="AI Barbell Squat Session")
+    exercise: Optional[str] = None
+    reps: Optional[int] = None
+    total_reps: Optional[int] = None
     duration_minutes: float = Field(..., ge=0, example=15.0)
     calories_burned: Optional[int] = Field(default=120, ge=0)
     intensity: Optional[str] = Field(default="medium")
@@ -111,6 +115,8 @@ class WorkoutCompleteInput(BaseModel):
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     form_score: Optional[float] = Field(default=92.0, ge=0, le=100)
+    feedback: Optional[List[str]] = []
+    feedback_summary: Optional[str] = None
     exercises: Optional[List[ExerciseLogCreate]] = []
 
 
